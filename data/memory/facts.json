@@ -26,67 +26,23 @@
   },
   {
     "category": "profile",
-    "fact": "User location: New Delhi, Delhi, India",
-    "source": "system"
-  },
-  {
-    "category": "profile",
-    "fact": "User coordinates: 28.6139, 77.209",
-    "source": "system"
-  },
-  {
-    "category": "profile",
-    "fact": "User timezone: Asia/Kolkata",
-    "source": "system"
-  },
-  {
-    "category": "profile",
-    "fact": "User timezone: Asia/Calcutta",
-    "source": "system"
-  },
-  {
-    "category": "profile",
-    "fact": "User location: and current city?",
-    "source": "system"
-  },
-  {
-    "category": "profile",
-    "fact": "User location: Bengaluru, Karnataka, India",
-    "source": "system"
-  },
-  {
-    "category": "profile",
-    "fact": "User coordinates: 12.96766757434295, 77.76207383661092",
-    "source": "system"
-  },
-  {
-    "category": "profile",
-    "fact": "User location: and timezone?",
-    "source": "system"
-  },
-  {
-    "category": "profile",
-    "fact": "User coordinates: 12.96858341128918, 77.76253790145572",
-    "source": "system"
-  },
-  {
-    "category": "profile",
-    "fact": "User coordinates: 12.967386335194366, 77.76201182520957",
-    "source": "system"
-  },
-  {
-    "category": "profile",
-    "fact": "User location: New Delhi, , India",
-    "source": "system"
-  },
-  {
-    "category": "profile",
+    "key": "location",
     "fact": "User location: Hoskote, Karnataka, India",
-    "source": "system"
+    "source": "system",
+    "updated_at": "2026-10-09T20:55:13.106920"
   },
   {
     "category": "profile",
+    "key": "coordinates",
     "fact": "User coordinates: 13.0721, 77.7922",
-    "source": "system"
+    "source": "system",
+    "updated_at": "2026-10-09T20:55:13.119468"
+  },
+  {
+    "category": "profile",
+    "key": "timezone",
+    "fact": "User timezone: Asia/Calcutta",
+    "source": "system",
+    "updated_at": "2026-10-09T20:55:13.125702"
   }
 ]
