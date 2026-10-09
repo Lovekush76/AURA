@@ -66,11 +66,11 @@ class OllamaProvider:
                     err_body = await response.aread()
                     err_text = err_body.decode('utf-8', errors='replace')
                     if response.status_code == 404 or "not found" in err_text:
-                        if model != "qwen3.5:4b":
-                            logger.warning(f"Model '{model}' not found in Ollama. Seamlessly falling back to local 'qwen3.5:4b'.")
-                            async for tok in self.stream_chat("qwen3.5:4b", messages, temperature, num_ctx):
-                                yield tok
-                            return
+                        fallback_model = "qwen2.5:0.5b" if model != "qwen2.5:0.5b" else "qwen2.5:1.5b"
+                        logger.warning(f"Model '{model}' not found in Ollama. Seamlessly accelerating on fast local model '{fallback_model}'.")
+                        async for tok in self.stream_chat(fallback_model, messages, temperature, num_ctx):
+                            yield tok
+                        return
                         logger.warning(f"Model '{model}' not yet pulled in Ollama. Streaming simulation fallback.")
                         simulated_text = (
                             f"[Aura Local Mode] Model '{model}' not yet pulled. "

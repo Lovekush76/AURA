@@ -10,6 +10,7 @@ class RouteResult(BaseModel):
     num_ctx: int
     temperature: float
     pinned: bool
+    reasoning_mode: bool = False
 
 class LLMRouter:
     def __init__(self, ollama_host: str = "http://127.0.0.1:11434"):
@@ -64,13 +65,13 @@ class LLMRouter:
 
         if override_model:
             model_to_use = override_model if (not available or override_model in available) else default_model
-            return RouteResult(model=model_to_use, num_ctx=4096, temperature=0.7, pinned=False)
+            return RouteResult(model=model_to_use, num_ctx=4096, temperature=0.7, pinned=False, reasoning_mode=False)
 
         # Modality enforcement: Voice channel must never experience cold model swaps
         if channel == "voice":
             cfg = self.slots["voice"]
             model_to_use = cfg["model"] if (not available or cfg["model"] in available) else default_model
-            return RouteResult(model=model_to_use, num_ctx=cfg["ctx"], temperature=cfg["temp"], pinned=True)
+            return RouteResult(model=model_to_use, num_ctx=cfg["ctx"], temperature=cfg["temp"], pinned=True, reasoning_mode=False)
 
         # Structural intent detection for coding
         code_markers = ["def ", "class ", "import ", "function(", "const ", "SELECT ", "curl ", "npm ", "```"]
@@ -78,18 +79,24 @@ class LLMRouter:
             target = self.slots["code"]["model"]
             await self._ensure_heavy_residency(target)
             cfg = self.slots["code"]
-            return RouteResult(model=target, num_ctx=cfg["ctx"], temperature=cfg["temp"], pinned=False)
+            return RouteResult(model=target, num_ctx=cfg["ctx"], temperature=cfg["temp"], pinned=False, reasoning_mode=False)
 
-        # Algorithmic reasoning detection
-        if any(w in prompt.lower() for w in ["prove", "analyze complexity", "architect", "deep analysis"]):
+        # Algorithmic reasoning and problem solving detection
+        reasoning_markers = [
+            "prove", "analyze complexity", "architect", "deep analysis",
+            "step by step", "algorithm", "derive", "calculate", "solve",
+            "why does", "explain why", "deduce", "logic", "troubleshoot",
+            "root cause", "system design"
+        ]
+        if any(w in prompt.lower() for w in reasoning_markers):
             target = self.slots["reasoning"]["model"]
             await self._ensure_heavy_residency(target)
             cfg = self.slots["reasoning"]
-            return RouteResult(model=target, num_ctx=cfg["ctx"], temperature=cfg["temp"], pinned=False)
+            return RouteResult(model=target, num_ctx=cfg["ctx"], temperature=cfg["temp"], pinned=False, reasoning_mode=True)
 
         # Standard conversation fallback
         cfg = self.slots["chat"]
-        return RouteResult(model=cfg["model"], num_ctx=cfg["ctx"], temperature=cfg["temp"], pinned=True)
+        return RouteResult(model=cfg["model"], num_ctx=cfg["ctx"], temperature=cfg["temp"], pinned=True, reasoning_mode=False)
 
     async def _ensure_heavy_residency(self, target_model: str):
         """

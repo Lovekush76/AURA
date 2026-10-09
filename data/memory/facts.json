@@ -78,5 +78,15 @@
     "category": "profile",
     "fact": "User location: New Delhi, , India",
     "source": "system"
+  },
+  {
+    "category": "profile",
+    "fact": "User location: Hoskote, Karnataka, India",
+    "source": "system"
+  },
+  {
+    "category": "profile",
+    "fact": "User coordinates: 13.0721, 77.7922",
+    "source": "system"
   }
 ]
