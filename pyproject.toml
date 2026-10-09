@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aura-assistant"
+version = "3.5.0"
+description = "Sovereign local AI assistant with low-latency acoustic interaction, multi-model routing, and cgroup-sandboxed workspace."
+authors = [{ name = "Aura Core Team" }]
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.29.0",
+    "pydantic>=2.6.0",
+    "pydantic-settings>=2.2.0",
+    "httpx>=0.27.0",
+    "websockets>=12.0",
+    "docker>=7.0.0",
+    "unidiff>=0.7.5",
+    "chromadb>=0.4.24",
+    "sounddevice>=0.4.6",
+    "numpy>=1.26.0",
+    "torch>=2.2.0",
+    "faster-whisper>=1.0.0",
+    "openwakeword>=0.6.0",
+    "pyyaml>=6.0.1",
+    "argon2-cffi>=23.1.0"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.1.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.3.0",
+    "mypy>=1.9.0"
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+

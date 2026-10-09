@@ -1,0 +1,35 @@
+acoustic_core:
+  sample_rate: 16000
+  frame_samples: 1280
+  pre_roll_buffer_ms: 300
+  trailing_silence_ms: 600
+
+wake_word:
+  engine: "openwakeword"
+  model: "hey_jarvis"
+  threshold: 0.5
+  max_latency_ms: 300
+
+vad:
+  engine: "silero-vad"
+  speech_threshold: 0.2
+  min_audio_frames: 15
+
+biometrics:
+  engine: "pyannote"
+  vector_dim: 512
+  cosine_threshold: 0.85
+  profile_path: "data/audio_profiles/user.bin"
+
+asr:
+  engine: "faster-whisper"
+  model_size: "small"
+  compute_type: "int8"
+  beam_size: 1
+  language: "en"
+
+tts:
+  engine: "piper"
+  model: "en_US-lessac-medium"
+  sample_rate: 22050
+  sentence_streaming: true

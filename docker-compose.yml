@@ -1,0 +1,38 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aura-api
+    ports:
+      - "8000:8000"
+    environment:
+      - AURA_ENV=production
+      - OLLAMA_HOST=http://host.docker.internal:11434
+      - CHROMA_PERSIST_DIR=/app/data/chromadb
+      - SANDBOX_SOCKET_PATH=/run/aura/sandbox.sock
+    volumes:
+      - ./data:/app/data
+      - /run/aura:/run/aura
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  chromadb:
+    image: chromadb/chroma:0.4.24
+    container_name: aura-chromadb
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./data/chromadb:/chroma/chroma
+    restart: unless-stopped
+
+  squid:
+    image: ubuntu/squid:latest
+    container_name: aura-egress-proxy
+    ports:
+      - "3128:3128"
+    volumes:
+      - ./sandbox/egress/squid.conf:/etc/squid/squid.conf:ro
+      - ./sandbox/egress/allowlist.txt:/etc/squid/allowlist.txt:ro
+    restart: unless-stopped

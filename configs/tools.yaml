@@ -1,0 +1,31 @@
+tools:
+  run_code:
+    sensitivity: "personal"
+    requires_approval: false
+    requires_voice_match: true
+    network_profile: "none"
+    timeout_s: 20
+    allowed_roles: ["user", "admin"]
+
+  patch_filesystem:
+    sensitivity: "critical"
+    requires_approval: true
+    requires_voice_match: true
+    network_profile: "none"
+    timeout_s: 15
+    allowed_roles: ["user", "admin"]
+
+  home_control:
+    sensitivity: "personal"
+    requires_approval: false
+    requires_voice_match: true
+    network_profile: "lan"
+    timeout_s: 5
+    critical_entities: ["lock.", "alarm_control_panel.", "cover.garage"]
+
+  web_search:
+    sensitivity: "public"
+    requires_approval: false
+    requires_voice_match: false
+    network_profile: "registry"
+    timeout_s: 10

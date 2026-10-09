@@ -1,0 +1,82 @@
+[
+  {
+    "category": "identity",
+    "fact": "my name is lovekush kumar",
+    "source": "conversation"
+  },
+  {
+    "category": "identity",
+    "fact": "my name is lovekush kumar",
+    "source": "conversation"
+  },
+  {
+    "category": "identity",
+    "fact": "my name is lovekush kumar",
+    "source": "conversation"
+  },
+  {
+    "category": "profile",
+    "fact": "User name: Lovekush Kumar",
+    "source": "system"
+  },
+  {
+    "category": "profile",
+    "fact": "User linkedin_url: https://www.linkedin.com/in/lovekush-kumar-9478b4183/",
+    "source": "system"
+  },
+  {
+    "category": "profile",
+    "fact": "User location: New Delhi, Delhi, India",
+    "source": "system"
+  },
+  {
+    "category": "profile",
+    "fact": "User coordinates: 28.6139, 77.209",
+    "source": "system"
+  },
+  {
+    "category": "profile",
+    "fact": "User timezone: Asia/Kolkata",
+    "source": "system"
+  },
+  {
+    "category": "profile",
+    "fact": "User timezone: Asia/Calcutta",
+    "source": "system"
+  },
+  {
+    "category": "profile",
+    "fact": "User location: and current city?",
+    "source": "system"
+  },
+  {
+    "category": "profile",
+    "fact": "User location: Bengaluru, Karnataka, India",
+    "source": "system"
+  },
+  {
+    "category": "profile",
+    "fact": "User coordinates: 12.96766757434295, 77.76207383661092",
+    "source": "system"
+  },
+  {
+    "category": "profile",
+    "fact": "User location: and timezone?",
+    "source": "system"
+  },
+  {
+    "category": "profile",
+    "fact": "User coordinates: 12.96858341128918, 77.76253790145572",
+    "source": "system"
+  },
+  {
+    "category": "profile",
+    "fact": "User coordinates: 12.967386335194366, 77.76201182520957",
+    "source": "system"
+  },
+  {
+    "category": "profile",
+    "fact": "User location: New Delhi, , India",
+    "source": "system"
+  }
+]

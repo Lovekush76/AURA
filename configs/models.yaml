@@ -1,0 +1,32 @@
+routing:
+  voice:
+    primary: "qwen3.5:4b"
+    fallback: ["qwen3:4b", "llama3.2:3b"]
+    vram_budget_mb: 3500
+    residency: "pinned"
+  chat:
+    primary: "qwen3.5:4b"
+    fallback: ["qwen3:8b"]
+    vram_budget_mb: 3500
+    residency: "pinned"
+  code:
+    primary: "qwen3-coder:30b"
+    fallback: ["qwen2.5-coder:7b"]
+    vram_budget_mb: 19500
+    residency: "on_demand"
+  reasoning:
+    primary: "deepseek-r1:14b"
+    fallback: ["deepseek-r1:8b"]
+    vram_budget_mb: 9500
+    residency: "on_demand"
+  embedding:
+    primary: "nomic-embed-text"
+    dimensions: 768
+    vram_budget_mb: 600
+    residency: "pinned"
+
+arbitration:
+  total_vram_ceiling_mb: 24576
+  safety_headroom_mb: 1024
+  max_loaded_heavy_models: 1
+  idle_heavy_timeout_seconds: 600
