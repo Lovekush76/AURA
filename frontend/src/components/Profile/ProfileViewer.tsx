@@ -41,7 +41,7 @@ export const ProfileViewer = () => {
   };
 
   return (
-    <div className="flex-1 flex flex-col bg-white/[0.02] border border-white/[0.08] rounded-2xl p-6 overflow-y-auto">
+    <div className="aura-panel-3d flex-1 flex flex-col rounded-2xl p-6 overflow-y-auto preserve-3d relative">
       {/* Header Banner */}
       <div className="flex items-center justify-between pb-6 border-b border-white/[0.08]">
         <div className="flex items-center gap-4">
