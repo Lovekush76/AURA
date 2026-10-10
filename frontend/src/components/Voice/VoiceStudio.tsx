@@ -1,8 +1,6 @@
 import { useEffect } from 'react';
-import { motion } from 'framer-motion';
 import { Volume2, Mic, Play, Sparkles, Check, Sliders } from 'lucide-react';
 import { useVoiceStore } from '../../store/voiceStore';
-import { Tilt3DCard, MiniNeuralOrb3D } from '../HUD/Dynamic3DElements';
 
 export const VoiceStudio = () => {
   const {
@@ -61,27 +59,17 @@ export const VoiceStudio = () => {
   };
 
   return (
-    <div className="aura-panel-3d flex-1 flex flex-col rounded-2xl p-6 overflow-y-auto preserve-3d relative">
-      {/* Studio Header with 3D Animated Acoustic Orb */}
+    <div className="flex-1 flex flex-col bg-white/[0.02] border border-white/[0.08] rounded-2xl p-6 overflow-y-auto backdrop-blur-xl">
+      {/* Studio Header */}
       <div className="flex items-center justify-between pb-6 border-b border-white/[0.08] flex-wrap gap-4">
         <div className="flex items-center gap-4">
-          <motion.div
-            animate={{ y: [0, -5, 0], rotateZ: [0, 3, -3, 0] }}
-            transition={{ duration: 4, repeat: Infinity, ease: 'easeInOut' }}
-            className="rounded-2xl bg-gradient-to-tr from-purple-500/20 to-pink-500/20 border border-purple-400/40 p-1 shadow-[0_0_30px_rgba(168,85,247,0.3)]"
-          >
-            <MiniNeuralOrb3D
-              size={60}
-              active={voiceState === 'speaking' || voiceState === 'listening'}
-              colorMode="purple"
-            />
-          </motion.div>
+          <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-purple-500 to-pink-500 flex items-center justify-center text-white shadow-[0_0_25px_rgba(168,85,247,0.3)]">
+            <Volume2 size={32} />
+          </div>
           <div>
             <div className="flex items-center gap-2 flex-wrap">
-              <h2 className="text-xl font-bold text-white tracking-wide aura-text-glow-purple">
-                Aura 3D Voice Studio
-              </h2>
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-400/15 text-purple-300 border border-purple-400/35 font-mono">
+              <h2 className="text-xl font-bold text-white tracking-wide">Aura Voice Studio</h2>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-400/10 text-purple-300 border border-purple-400/30">
                 PLEASANT FEMALE VOICE ENGINE
               </span>
             </div>
@@ -93,36 +81,28 @@ export const VoiceStudio = () => {
 
         <div className="flex items-center gap-3">
           {voiceState === 'speaking' ? (
-            <motion.button
-              whileHover={{ scale: 1.06 }}
-              whileTap={{ scale: 0.94 }}
+            <button
               onClick={handleStopSpeaking}
               className="flex items-center gap-2 px-4 py-2 rounded-xl bg-red-500/20 text-red-300 border border-red-500/40 text-xs font-semibold hover:bg-red-500/30 transition-all cursor-pointer"
             >
               Stop Speaking
-            </motion.button>
+            </button>
           ) : (
-            <motion.button
-              whileHover={{ scale: 1.06, y: -2, rotateX: 8 }}
-              whileTap={{ scale: 0.94 }}
+            <button
               onClick={() => handleTestVoice()}
-              className="aura-btn-3d flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-purple-500 to-pink-500 text-white text-xs font-semibold hover:opacity-90 transition-all shadow-[0_0_20px_rgba(168,85,247,0.35)] cursor-pointer"
+              className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-purple-500 to-pink-500 text-white text-xs font-semibold hover:opacity-90 transition-all shadow-[0_0_20px_rgba(168,85,247,0.3)] cursor-pointer"
             >
               <Play size={14} className="fill-current" />
               <span>Test Pleasant Voice</span>
-            </motion.button>
+            </button>
           )}
         </div>
       </div>
 
-      {/* 3D Tilted Voice Selection & Customization Controls */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6 preserve-3d">
+      {/* Voice Selection & Customization Controls */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
         {/* Selected Voice Card */}
-        <Tilt3DCard
-          intensity={6}
-          glareColor="rgba(168, 85, 247, 0.16)"
-          className="aura-card-3d p-5 rounded-xl flex flex-col justify-between"
-        >
+        <div className="p-5 rounded-xl bg-white/[0.03] border border-white/[0.06] flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between mb-3">
               <label className="text-xs font-mono text-white/50 flex items-center gap-1.5">
@@ -137,7 +117,7 @@ export const VoiceStudio = () => {
             <select
               value={selectedVoiceName}
               onChange={(e) => setSelectedVoiceName(e.target.value)}
-              className="w-full bg-[#12121A] border border-white/[0.15] rounded-xl px-3.5 py-3 text-sm text-white focus:outline-none focus:border-purple-400 cursor-pointer relative z-30"
+              className="w-full bg-[#12121A] border border-white/[0.15] rounded-xl px-3.5 py-3 text-sm text-white focus:outline-none focus:border-purple-400 cursor-pointer"
             >
               {availableVoices.length > 0 ? (
                 availableVoices.map((v) => (
@@ -158,7 +138,7 @@ export const VoiceStudio = () => {
             </select>
           </div>
 
-          <div className="mt-4 pt-4 border-t border-white/[0.06] flex items-center justify-between text-xs text-white/60 relative z-30">
+          <div className="mt-4 pt-4 border-t border-white/[0.06] flex items-center justify-between text-xs text-white/60">
             <span>
               Current Voice:{' '}
               <strong className="text-purple-300">
@@ -172,23 +152,19 @@ export const VoiceStudio = () => {
               Preview
             </button>
           </div>
-        </Tilt3DCard>
+        </div>
 
         {/* Pitch & Modulation Sliders */}
-        <Tilt3DCard
-          intensity={6}
-          glareColor="rgba(0, 240, 255, 0.14)"
-          className="aura-card-3d p-5 rounded-xl space-y-4"
-        >
+        <div className="p-5 rounded-xl bg-white/[0.03] border border-white/[0.06] space-y-4">
           <div className="flex items-center justify-between">
             <span className="text-xs font-mono text-white/50 flex items-center gap-1.5">
               <Sliders size={13} className="text-cyan-400" />
-              3D Acoustic Modulation
+              Acoustic Modulation
             </span>
             <span className="text-[10px] text-white/40">Feminine Warmth Tuned</span>
           </div>
 
-          <div className="relative z-30">
+          <div>
             <div className="flex justify-between text-xs text-white/70 mb-1">
               <span>Voice Pitch:</span>
               <span className="text-cyan-400 font-mono">
@@ -211,7 +187,7 @@ export const VoiceStudio = () => {
             </div>
           </div>
 
-          <div className="relative z-30">
+          <div>
             <div className="flex justify-between text-xs text-white/70 mb-1">
               <span>Speech Speed:</span>
               <span className="text-purple-400 font-mono">{speechRate.toFixed(2)}x</span>
@@ -226,53 +202,60 @@ export const VoiceStudio = () => {
               className="w-full accent-purple-400 cursor-pointer"
             />
           </div>
-        </Tilt3DCard>
+        </div>
       </div>
 
-      {/* Quick 3D Voice Samplers */}
-      <div className="mt-6 p-5 rounded-xl aura-card-3d preserve-3d">
+      {/* Quick Voice Samplers */}
+      <div className="mt-6 p-5 rounded-xl bg-white/[0.03] border border-white/[0.06]">
         <h3 className="text-xs font-mono text-white/50 uppercase tracking-wider mb-3">
-          3D Voice Preview Phrases
+          Voice Preview Phrases
         </h3>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 preserve-3d">
-          {[
-            {
-              title: 'Greeting',
-              text: 'Hello Lovekush! Welcome back to Aura.'
-            },
-            {
-              title: 'System Telemetry',
-              text: 'Your system status is nominal. Memory is air-gapped and secure.'
-            },
-            {
-              title: 'Workflow Assistance',
-              text: 'I am here to write code, review diffs, and assist your workflow.'
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <button
+            onClick={() => handleTestVoice('Hello Lovekush! Welcome back to Aura.')}
+            className="p-3 text-left rounded-xl bg-white/[0.02] border border-white/[0.06] hover:border-purple-400/40 hover:bg-white/[0.04] transition-all group cursor-pointer"
+          >
+            <p className="text-xs font-semibold text-white group-hover:text-purple-300">
+              Greeting
+            </p>
+            <p className="text-[11px] text-white/50 truncate mt-1">
+              &quot;Hello Lovekush! Welcome back to Aura.&quot;
+            </p>
+          </button>
+
+          <button
+            onClick={() =>
+              handleTestVoice('Your system status is nominal. Memory is air-gapped and secure.')
             }
-          ].map((item) => (
-            <motion.button
-              key={item.title}
-              whileHover={{ scale: 1.04, y: -3, rotateX: 8 }}
-              whileTap={{ scale: 0.96 }}
-              onClick={() => handleTestVoice(item.text)}
-              className="p-3 text-left rounded-xl bg-white/[0.03] border border-white/[0.08] hover:border-purple-400/45 hover:bg-purple-500/10 transition-all group cursor-pointer"
-            >
-              <p className="text-xs font-semibold text-white group-hover:text-purple-300">
-                {item.title}
-              </p>
-              <p className="text-[11px] text-white/50 truncate mt-1">
-                &quot;{item.text}&quot;
-              </p>
-            </motion.button>
-          ))}
+            className="p-3 text-left rounded-xl bg-white/[0.02] border border-white/[0.06] hover:border-purple-400/40 hover:bg-white/[0.04] transition-all group cursor-pointer"
+          >
+            <p className="text-xs font-semibold text-white group-hover:text-purple-300">
+              System Telemetry
+            </p>
+            <p className="text-[11px] text-white/50 truncate mt-1">
+              &quot;Your system status is nominal.&quot;
+            </p>
+          </button>
+
+          <button
+            onClick={() =>
+              handleTestVoice('I am here to write code, review diffs, and assist your workflow.')
+            }
+            className="p-3 text-left rounded-xl bg-white/[0.02] border border-white/[0.06] hover:border-purple-400/40 hover:bg-white/[0.04] transition-all group cursor-pointer"
+          >
+            <p className="text-xs font-semibold text-white group-hover:text-purple-300">
+              Workflow Assistance
+            </p>
+            <p className="text-[11px] text-white/50 truncate mt-1">
+              &quot;I am here to write code and review diffs.&quot;
+            </p>
+          </button>
         </div>
       </div>
 
       {/* Voice Preferences: Hands-free Wake Word & Chat Voice-back */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6 preserve-3d">
-        <Tilt3DCard
-          intensity={5}
-          className="aura-card-3d p-4 rounded-xl flex items-center justify-between"
-        >
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
+        <div className="p-4 rounded-xl bg-white/[0.02] border border-white/[0.06] flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-emerald-400/10 border border-emerald-400/20 flex items-center justify-center text-emerald-400">
               <Mic size={18} />
@@ -285,25 +268,20 @@ export const VoiceStudio = () => {
             </div>
           </div>
 
-          <motion.button
-            whileHover={{ scale: 1.06 }}
-            whileTap={{ scale: 0.94 }}
+          <button
             onClick={() => setWakeWordEnabled(!wakeWordEnabled)}
-            className={`relative z-30 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
               wakeWordEnabled
-                ? 'bg-emerald-400 text-black shadow-[0_0_15px_rgba(52,211,153,0.3)]'
+                ? 'bg-emerald-400 text-black shadow-[0_0_15px_rgba(52,211,153,0.2)]'
                 : 'bg-white/10 text-white/60 hover:bg-white/20'
             }`}
           >
             {wakeWordEnabled && <Check size={14} />}
             <span>{wakeWordEnabled ? 'Active' : 'Disabled'}</span>
-          </motion.button>
-        </Tilt3DCard>
+          </button>
+        </div>
 
-        <Tilt3DCard
-          intensity={5}
-          className="aura-card-3d p-4 rounded-xl flex items-center justify-between"
-        >
+        <div className="p-4 rounded-xl bg-white/[0.02] border border-white/[0.06] flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-purple-400/10 border border-purple-400/20 flex items-center justify-center text-purple-400">
               <Volume2 size={18} />
@@ -316,20 +294,18 @@ export const VoiceStudio = () => {
             </div>
           </div>
 
-          <motion.button
-            whileHover={{ scale: 1.06 }}
-            whileTap={{ scale: 0.94 }}
+          <button
             onClick={() => setIsAutoSpeakChat(!isAutoSpeakChat)}
-            className={`relative z-30 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
               isAutoSpeakChat
-                ? 'bg-purple-400 text-black shadow-[0_0_15px_rgba(168,85,247,0.3)]'
+                ? 'bg-purple-400 text-black shadow-[0_0_15px_rgba(168,85,247,0.2)]'
                 : 'bg-white/10 text-white/60 hover:bg-white/20'
             }`}
           >
             {isAutoSpeakChat && <Check size={14} />}
             <span>{isAutoSpeakChat ? 'Enabled' : 'Disabled'}</span>
-          </motion.button>
-        </Tilt3DCard>
+          </button>
+        </div>
       </div>
     </div>
   );
