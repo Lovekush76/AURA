@@ -129,8 +129,11 @@ class OllamaProvider:
                 yield token + " "
             return
 
-        # Keep fast prefill window on CPU while supporting FlashAttention 32K scaling
-        effective_ctx = min(num_ctx, 2048) if model in ("qwen2.5:0.5b", "qwen2.5:1.5b") else min(num_ctx, 32768)
+        # Keep fast prefill window on CPU for standard chat while scaling up for 32K code/reasoning routes
+        is_small_chat = model in ("qwen2.5:0.5b", "qwen2.5:1.5b") and num_ctx <= 4096
+        effective_ctx = min(num_ctx, 2048) if is_small_chat else min(num_ctx, 32768)
+        dynamic_predict = 1024 if num_ctx >= 16384 else 512
+
         payload = {
             "model": model,
             "messages": messages,
@@ -142,7 +145,7 @@ class OllamaProvider:
                 "num_ctx": effective_ctx,
                 "num_batch": 512,
                 "num_thread": 8,
-                "num_predict": 384,
+                "num_predict": dynamic_predict,
                 "use_mmap": True
             }
         }

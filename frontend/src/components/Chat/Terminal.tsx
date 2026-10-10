@@ -17,6 +17,7 @@ import { useChatStore, MODEL_CATALOG, type AuraModelId } from '../../store/chatS
 import { useLocationStore } from '../../store/locationStore';
 import { useVoiceStore } from '../../store/voiceStore';
 import { useWakeWord } from '../../hooks/useWakeWord';
+import { getAuthHeaders, getAuraSessionId } from '../../config/api';
 
 export const Terminal = () => {
   const {
@@ -102,14 +103,12 @@ export const Terminal = () => {
     try {
       const response = await fetch('/api/v1/chat/stream', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: 'Bearer aura_sec_default_change_me'
-        },
+        headers: getAuthHeaders(),
         body: JSON.stringify({
           prompt: queryText,
           channel: 'text',
           location: location,
+          session_id: getAuraSessionId(),
           override_model: selectedModel === 'auto' ? undefined : selectedModel
         }),
         signal: controller.signal

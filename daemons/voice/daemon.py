@@ -220,16 +220,19 @@ class VoiceDaemon:
             logger.info("TTS playback completed. Audio input unmuted.")
 
     async def _speak_sentence(self, sentence: str):
-        """Uses Windows native System.Speech synthesizer for zero-latency neural/system voice."""
+        """Uses Windows native System.Speech synthesizer with environment-variable isolation (zero injection surface)."""
         loop = asyncio.get_running_loop()
         def _speak():
             try:
-                clean = sentence.replace('"', ' ').replace("'", " ").replace("\n", " ").strip()
+                clean = sentence.replace("\n", " ").strip()
                 if not clean:
                     return
-                ps_code = f'$s = New-Object -ComObject SAPI.SpVoice; $s.Speak(\'{clean}\')'
+                tts_env = os.environ.copy()
+                tts_env["AURA_TTS_TEXT"] = clean[:2000]
+                ps_code = "$s = New-Object -ComObject SAPI.SpVoice; $s.Speak($env:AURA_TTS_TEXT)"
                 subprocess.run(
-                    ["powershell", "-NoProfile", "-Command", ps_code],
+                    ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_code],
+                    env=tts_env,
                     timeout=10,
                     capture_output=True
                 )

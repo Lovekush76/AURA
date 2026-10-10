@@ -32,7 +32,7 @@ class Container:
 
         # Core Engines
         self.vram_arbiter = VRAMArbiter()
-        self.llm_router = LLMRouter()
+        self.llm_router = LLMRouter(vram_arbiter=self.vram_arbiter)
         self.ollama_provider = OllamaProvider()
         self.biometric_gating = BiometricGating(tools_cfg)
         self.episodic_memory = EpisodicMemoryManager(self.workspace_root / "data" / "memory")

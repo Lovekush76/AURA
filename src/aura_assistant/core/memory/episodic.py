@@ -75,6 +75,8 @@ class EpisodicMemoryManager:
                 "vector": self._compute_fast_vector(fact_str)
             })
             self._save_facts()
+            from aura_assistant.core.db.session import persist_memory_orm
+            persist_memory_orm(kind="profile", content=fact_str, importance=1.5)
         except Exception as e:
             logger.error(f"Failed to persist user profile: {e}")
 
@@ -93,6 +95,8 @@ class EpisodicMemoryManager:
                 "vector": self._compute_fast_vector(fact_str)
             })
             self._save_facts()
+            from aura_assistant.core.db.session import persist_memory_orm
+            persist_memory_orm(kind="episodic_archive", content=fact_str, importance=1.2)
 
     def get_profile(self) -> Dict[str, Any]:
         if self.profile_file.exists():

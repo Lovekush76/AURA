@@ -4,5 +4,7 @@
   "location": "Bengaluru, Karnataka, India",
   "coordinates": "12.983569, 77.731717",
   "timezone": "Asia/Calcutta",
-  "about": "its type and you are not able to pick it from cache that is why context is failed so tell me again how to improve it"
+  "about": "its type and you are not able to pick it from cache that is why context is failed so tell me again how to improve it",
+  "headline": "Senior Software Engineer / AI Architect",
+  "skills": "Python, TypeScript, React, FastAPI, NVIDIA NIM"
 }

@@ -53,7 +53,12 @@ class ContextEngine:
 
     def get_or_create_history(self, session_id: str) -> List[ConversationTurn]:
         if session_id not in self.session_histories:
-            self.session_histories[session_id] = []
+            from aura_assistant.core.db.session import load_conversation_history
+            db_turns = load_conversation_history(session_id, limit=16)
+            self.session_histories[session_id] = [
+                ConversationTurn(role=t["role"], content=t["content"])
+                for t in db_turns
+            ]
         return self.session_histories[session_id]
 
     def resolve_coreferences(self, session_id: str, prompt: str) -> str:
@@ -81,11 +86,20 @@ class ContextEngine:
             return f"{prompt} [Context Entities: {' '.join(unique_anchors)}]"
         return prompt
 
-    def record_turn(self, session_id: str, user_prompt: str, assistant_response: str) -> Optional[str]:
+    def record_turn(
+        self,
+        session_id: str,
+        user_prompt: str,
+        assistant_response: str,
+        model_name: str = "qwen3.5:4b"
+    ) -> Optional[str]:
         """
-        Records a completed turn in session memory with semantic compaction.
+        Records a completed turn in session memory and SQLite with semantic compaction.
         Returns newly compacted summary chunk if compaction triggered, for persistent archiving.
         """
+        from aura_assistant.core.db.session import persist_conversation_turn
+        persist_conversation_turn(session_id, user_prompt, assistant_response, model_name=model_name)
+
         history = self.get_or_create_history(session_id)
         history.append(ConversationTurn(role="user", content=user_prompt))
         history.append(ConversationTurn(role="assistant", content=assistant_response))

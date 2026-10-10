@@ -13,8 +13,9 @@ class RouteResult(BaseModel):
     reasoning_mode: bool = False
 
 class LLMRouter:
-    def __init__(self, ollama_host: str = "http://127.0.0.1:11434"):
+    def __init__(self, ollama_host: str = "http://127.0.0.1:11434", vram_arbiter: Any = None):
         self.ollama_host = ollama_host
+        self.vram_arbiter = vram_arbiter
         self.slots = {
             "voice": {"model": "qwen3.5:4b", "ctx": 1536, "temp": 0.4, "pinned": True},
             "chat": {"model": "qwen2.5:0.5b", "ctx": 2048, "temp": 0.5, "pinned": True},
@@ -112,16 +113,24 @@ class LLMRouter:
 
     async def _ensure_heavy_residency(self, target_model: str):
         """
-        Safely swaps heavy models without evicting the pinned voice model.
+        Safely swaps heavy models via VRAMArbiter without evicting the pinned voice model.
         """
+        evicted_by_arbiter = None
+        if self.vram_arbiter is not None:
+            if not self.vram_arbiter.can_load_model(target_model):
+                logger.warning(f"VRAMArbiter rejected {target_model} (exceeds 24GB ceiling).")
+                return
+            evicted_by_arbiter = self.vram_arbiter.notify_model_requested(target_model)
+
         if self.current_heavy_model == target_model:
             return
 
+        model_to_unload = evicted_by_arbiter or self.current_heavy_model
         try:
             async with httpx.AsyncClient(base_url=self.ollama_host, timeout=30.0) as client:
-                if self.current_heavy_model:
-                    logger.info(f"Unloading idle heavy model: {self.current_heavy_model}")
-                    await client.post("/api/generate", json={"model": self.current_heavy_model, "keep_alive": 0})
+                if model_to_unload and model_to_unload != target_model:
+                    logger.info(f"Unloading idle heavy model: {model_to_unload}")
+                    await client.post("/api/generate", json={"model": model_to_unload, "keep_alive": 0})
 
                 logger.info(f"Pre-warming heavy slot model: {target_model}")
                 await client.post("/api/generate", json={"model": target_model, "keep_alive": "10m"})

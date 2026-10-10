@@ -1,10 +1,10 @@
 """
-Aura Assistant - Chat Streaming Router
-Serves Server-Sent Events (SSE) at /api/v1/chat/stream.
+Aura Assistant - Chat Streaming & Sovereign Profile Router
+Serves Server-Sent Events (SSE) at /api/v1/chat/stream and profile persistence at /api/v1/chat/profile.
 """
 
 import json
-from fastapi import APIRouter, Depends, Body
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any
@@ -21,6 +21,16 @@ class ChatStreamRequest(BaseModel):
     biometric_score: float = Field(1.0, description="Biometric verification score")
     override_model: Optional[str] = Field(None, description="Explicit model override")
     location: Optional[Dict[str, Any]] = Field(None, description="Client real-time location payload")
+    session_id: str = Field("default_session", description="Conversation session ID for multi-turn isolation")
+
+class ProfileUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    headline: Optional[str] = None
+    skills: Optional[str] = None
+    experience: Optional[str] = None
+    education: Optional[str] = None
+    location: Optional[str] = None
 
 @router.post("/stream")
 async def stream_chat_endpoint(
@@ -37,8 +47,27 @@ async def stream_chat_endpoint(
             speaker_verified=req.speaker_verified,
             biometric_score=req.biometric_score,
             override_model=req.override_model,
-            location=req.location
+            location=req.location,
+            session_id=req.session_id
         ):
             yield f"data: {json.dumps(event)}\n\n"
 
     return StreamingResponse(sse_event_generator(), media_type="text/event-stream")
+
+@router.get("/profile")
+async def get_profile_endpoint(user: str = Depends(verify_auth_token)):
+    container = get_container()
+    profile = container.episodic_memory.get_profile()
+    return {"ok": True, "profile": profile}
+
+@router.post("/profile")
+async def update_profile_endpoint(
+    req: ProfileUpdateRequest,
+    user: str = Depends(verify_auth_token)
+):
+    container = get_container()
+    updates = req.model_dump(exclude_none=True)
+    for key, val in updates.items():
+        if isinstance(val, str) and val.strip():
+            container.episodic_memory.save_profile_fact(key, val.strip())
+    return {"ok": True, "profile": container.episodic_memory.get_profile()}

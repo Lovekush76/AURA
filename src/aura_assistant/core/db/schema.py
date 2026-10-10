@@ -7,7 +7,7 @@ Implements all entities defined in the System Architecture & Database Schema Blu
 """
 
 import uuid
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from typing import Optional, List, Dict, Any
 from sqlalchemy import (
     Column, String, Text, Boolean, Integer, Float, ForeignKey, DateTime, Date, JSON, UniqueConstraint
@@ -18,6 +18,9 @@ Base = declarative_base()
 
 def generate_uuid() -> str:
     return str(uuid.uuid4())
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 # ==============================================================================
 # 1. CORE USER & CHAT DOMAIN
@@ -30,7 +33,7 @@ class User(Base):
     username = Column(String(64), unique=True, nullable=False, index=True)
     role = Column(String(32), default="user", nullable=False)
     preferences = Column(JSON, default=dict)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     # Relationships
     conversations = relationship("Conversation", back_populates="user", cascade="all, delete-orphan")
@@ -51,7 +54,7 @@ class Conversation(Base):
     title = Column(String(255), default="New Conversation")
     model = Column(String(64), default="qwen3.5:4b")
     is_incognito = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     user = relationship("User", back_populates="conversations")
     messages = relationship("Message", back_populates="conversation", cascade="all, delete-orphan")
@@ -65,7 +68,7 @@ class Message(Base):
     role = Column(String(32), nullable=False)  # 'user', 'assistant', 'system'
     content = Column(Text, nullable=False)
     status = Column(String(32), default="completed")  # 'pending', 'streaming', 'completed', 'error'
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     conversation = relationship("Conversation", back_populates="messages")
     parent = relationship("Message", remote_side=[id])
@@ -103,7 +106,7 @@ class Feedback(Base):
     message_id = Column(String(36), ForeignKey("messages.id", ondelete="CASCADE"), nullable=False, index=True)
     rating = Column(String(16), nullable=False)  # 'thumbs_up', 'thumbs_down', '1-5'
     comment = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     message = relationship("Message", back_populates="feedback")
 
@@ -120,7 +123,7 @@ class Collection(Base):
     classification = Column(String(32), default="internal")  # 'public', 'internal', 'restricted'
     embedding_model = Column(String(64), default="nomic-embed-text")
     embedding_dim = Column(Integer, default=768)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     user = relationship("User", back_populates="collections")
     documents = relationship("Document", back_populates="collection", cascade="all, delete-orphan")
@@ -137,7 +140,7 @@ class Document(Base):
     sha256 = Column(String(64), nullable=False)
     status = Column(String(32), default="indexed")
     chunk_count = Column(Integer, default=0)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     collection = relationship("Collection", back_populates="documents")
     chunks = relationship("Chunk", back_populates="document", cascade="all, delete-orphan")
@@ -162,7 +165,7 @@ class Memory(Base):
     kind = Column(String(64), default="preference")  # 'preference', 'fact', 'habit', 'identity'
     content = Column(Text, nullable=False)
     importance = Column(Float, default=1.0)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     user = relationship("User", back_populates="memories")
 
@@ -177,7 +180,7 @@ class ApiKey(Base):
     user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     key_hash = Column(String(128), unique=True, nullable=False, index=True)
     scopes = Column(JSON, default=list)  # e.g. ["chat", "code:exec", "workspace:patch"]
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     user = relationship("User", back_populates="api_keys")
 
@@ -189,7 +192,7 @@ class PromptTemplate(Base):
     name = Column(String(128), nullable=False)
     version = Column(Integer, default=1)
     content = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     owner = relationship("User", back_populates="prompt_templates")
 
@@ -200,7 +203,7 @@ class ModelProfile(Base):
     owner_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     base_model = Column(String(64), nullable=False)
     parameters = Column(JSON, default=dict)  # e.g. {"temperature": 0.4, "num_ctx": 4096}
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     owner = relationship("User", back_populates="model_profiles")
 
@@ -211,7 +214,7 @@ class Task(Base):
     user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     schedule = Column(String(64), nullable=False)  # Cron or interval expression
     status = Column(String(32), default="active")  # 'active', 'paused', 'completed'
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     user = relationship("User", back_populates="tasks")
     runs = relationship("TaskRun", back_populates="task", cascade="all, delete-orphan")
@@ -222,7 +225,7 @@ class TaskRun(Base):
     id = Column(String(36), primary_key=True, default=generate_uuid)
     task_id = Column(String(36), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True)
     status = Column(String(32), default="running")  # 'running', 'success', 'failed'
-    started_at = Column(DateTime, default=datetime.utcnow)
+    started_at = Column(DateTime, default=utc_now)
     finished_at = Column(DateTime, nullable=True)
     logs = Column(Text, nullable=True)
 
@@ -235,7 +238,7 @@ class AuditLog(Base):
     user_id = Column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     action = Column(String(64), nullable=False)
     details = Column(JSON, default=dict)
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime, default=utc_now)
 
     user = relationship("User", back_populates="audit_logs")
 

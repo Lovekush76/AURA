@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { User, Linkedin, MapPin, Brain, Shield, Sparkles, CheckCircle, Save } from 'lucide-react';
 import { useLocationStore } from '../../store/locationStore';
+import { getAuthHeaders } from '../../config/api';
 
 interface ProfileData {
   name?: string;
@@ -27,15 +28,34 @@ export const ProfileViewer = () => {
   const [savedStatus, setSavedStatus] = useState(false);
 
   useEffect(() => {
-    if (location.city) {
-      setProfile((prev) => ({
-        ...prev,
-        location: `${location.city}, ${location.country}`
-      }));
-    }
-  }, [location]);
+    let mounted = true;
+    fetch('/api/v1/chat/profile', { headers: getAuthHeaders() })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (mounted && data?.ok && data.profile) {
+          setProfile((prev) => ({
+            ...prev,
+            ...data.profile,
+            location:
+              data.profile.location ||
+              (location.city ? `${location.city}, ${location.country}` : prev.location)
+          }));
+        }
+      })
+      .catch(() => {});
+    return () => {
+      mounted = false;
+    };
+  }, [location.city, location.country]);
 
-  const handleSave = () => {
+  const handleSave = async () => {
+    try {
+      await fetch('/api/v1/chat/profile', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(profile)
+      });
+    } catch {}
     setSavedStatus(true);
     setTimeout(() => setSavedStatus(false), 2500);
   };

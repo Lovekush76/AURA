@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Code, Check, X, RefreshCw } from 'lucide-react';
 import { useWorkspaceStore } from '../../store/workspaceStore';
+import { getAuthHeaders } from '../../config/api';
 
 export const DiffReview = () => {
   const { activeFilePath, proposedDiff, setProposedDiff } = useWorkspaceStore();
@@ -12,10 +13,7 @@ export const DiffReview = () => {
     try {
       const resp = await fetch('/api/v1/workspace/patch', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer aura_sec_default_change_me'
-        },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ diff: proposedDiff })
       });
       const data = await resp.json();
