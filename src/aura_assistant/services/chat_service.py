@@ -185,13 +185,14 @@ class ChatService:
         full_response_acc = []
 
         if fast_path_text:
-            # High-throughput streaming (simulating 160+ tokens/sec with sub-millisecond pacing)
+            # High-throughput streaming calibrated for Windows 15.6ms timer clock (~180-220 tokens/sec)
             words = fast_path_text.split(" ")
             for i, word in enumerate(words):
                 token = word + (" " if i < len(words) - 1 else "")
                 full_response_acc.append(token)
                 yield {"type": "token", "content": token}
-                await asyncio.sleep(0.006)  # ~160 tokens/sec delivery
+                if i % 3 == 2:
+                    await asyncio.sleep(0.001)
         else:
             # Real Ollama / NVIDIA NIM stream
             async for token in self.provider.stream_chat(

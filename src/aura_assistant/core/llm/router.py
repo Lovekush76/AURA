@@ -26,9 +26,11 @@ class LLMRouter:
         self._cached_available_models: Optional[set] = None
 
     async def get_available_models(self) -> set:
-        """Fetches models currently present in Ollama."""
+        """Fetches models currently present in Ollama (cached in RAM for 0ms routing)."""
+        if self._cached_available_models is not None:
+            return self._cached_available_models
         try:
-            async with httpx.AsyncClient(base_url=self.ollama_host, timeout=5.0) as client:
+            async with httpx.AsyncClient(base_url=self.ollama_host, timeout=2.0) as client:
                 resp = await client.get("/api/tags")
                 if resp.status_code == 200:
                     models = resp.json().get("models", [])

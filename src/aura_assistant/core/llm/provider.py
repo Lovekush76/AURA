@@ -16,18 +16,27 @@ os.environ.setdefault("OLLAMA_KV_CACHE_TYPE", "q4_0")
 
 logger = logging.getLogger("aura-llm-provider")
 
+import time
+
 class OllamaProvider:
     def __init__(self, host: str = "http://127.0.0.1:11434"):
         self.host = host.rstrip("/")
         self.nim_base_url = os.environ.get("NVIDIA_NIM_BASE_URL", "https://integrate.api.nvidia.com/v1")
         self.is_offline_simulation = False
+        self._health_valid_until: float = 0.0
 
     async def check_health(self) -> bool:
-        """Checks if local Ollama daemon is reachable."""
+        """Checks if local Ollama daemon is reachable (cached for 60s to eliminate I/O overhead)."""
+        now = time.time()
+        if now < self._health_valid_until:
+            return True
         try:
             async with httpx.AsyncClient(timeout=2.0) as client:
                 res = await client.get(f"{self.host}/api/tags")
-                return res.status_code == 200
+                if res.status_code == 200:
+                    self._health_valid_until = now + 60.0
+                    return True
+                return False
         except Exception:
             return False
 
@@ -127,6 +136,7 @@ class OllamaProvider:
             "messages": messages,
             "stream": True,
             "think": False,
+            "keep_alive": -1,
             "options": {
                 "temperature": temperature,
                 "num_ctx": effective_ctx,
