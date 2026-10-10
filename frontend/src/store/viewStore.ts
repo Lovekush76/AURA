@@ -17,7 +17,7 @@ interface ViewStore {
 export const useViewStore = create<ViewStore>((set) => ({
   activeTab: 'chat',
   isSplitView: false,
-  show3DCoreDock: true,
+  show3DCoreDock: false, // Default to clean full-width layout; toggleable anytime via "3D Orb" or "3D Core" tab
   is3DTiltEnabled: true,
   setActiveTab: (activeTab) => set({ activeTab }),
   toggleSplitView: () => set((s) => ({ isSplitView: !s.isSplitView })),
