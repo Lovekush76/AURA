@@ -1,6 +1,11 @@
+import asyncio
+import threading
+import numpy as np
 import pytest
 from aura_assistant.core.voice.gating import BiometricGating
 from aura_assistant.core.voice.formatter import VoiceFormatter
+from daemons.voice.daemon import VoiceDaemon
+
 
 def test_biometric_gating_strips_sensitive_tools_under_threshold():
     tools_cfg = {
@@ -39,6 +44,7 @@ def test_biometric_gating_strips_sensitive_tools_under_threshold():
     )
     assert len(text_allowed) == 3
 
+
 def test_voice_formatter_sanitization():
     raw_markdown = """
 # System Diagnostics
@@ -60,3 +66,41 @@ Equation: $E = mc^2$
 
     sentences = VoiceFormatter.split_into_sentences("Hello there. How are you today? I am ready!")
     assert len(sentences) == 3
+
+
+@pytest.mark.asyncio
+async def test_voice_daemon_honest_biometrics_and_threadsafe_bounded_queue():
+    daemon = VoiceDaemon(max_queue_frames=4)
+    daemon._loop = asyncio.get_running_loop()
+
+    try:
+        # 1. Honest unverified state when no biometric model / voiceprint is enrolled
+        dummy_audio = np.zeros(1280, dtype=np.float32)
+        verified, score, status = daemon.verify_speaker_biometrics(dummy_audio)
+        assert verified is False
+        assert score == 0.0
+        assert status == "unverified_no_biometric_model"
+
+        # 2. Simulate PortAudio C thread pushing 10 frames into a maxsize=4 queue
+        indata = np.ones((1280, 1), dtype=np.float32) * 0.1
+
+        def _portaudio_thread_worker():
+            for _ in range(10):
+                daemon.audio_callback(indata, 1280, None, None)
+
+        t = threading.Thread(target=_portaudio_thread_worker)
+        t.start()
+        t.join(timeout=2.0)
+
+        # Allow loop.call_soon_threadsafe callbacks to drain
+        await asyncio.sleep(0.05)
+
+        assert daemon.audio_queue.qsize() == 4
+        assert daemon.dropped_frames_count == 6
+        diag = daemon.get_diagnostics()
+        assert diag["dropped_frames_count"] == 6
+        assert diag["queue_maxsize"] == 4
+    finally:
+        daemon.shutdown()
+        # Callback after shutdown must be a safe no-op
+        daemon.audio_callback(indata, 1280, None, None)

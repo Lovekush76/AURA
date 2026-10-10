@@ -55,10 +55,11 @@ async def voice_ipc_endpoint(websocket: WebSocket):
                 user_text = str(payload.get("text", "")).strip()
                 if not user_text:
                     continue
-                speaker_verified = bool(payload.get("speaker_verified", True))
-                raw_score = float(payload.get("biometric_score", 1.0))
+                speaker_verified = bool(payload.get("speaker_verified", False))
+                raw_score = float(payload.get("biometric_score", 0.0))
                 biometric_score = max(0.0, min(1.0, raw_score))
                 session_id = str(payload.get("session_id", "voice_daemon_session"))
+
 
                 logger.info(f"Received Utterance from Voice Daemon: '{user_text}' (verified={speaker_verified}, score={biometric_score:.2f})")
 

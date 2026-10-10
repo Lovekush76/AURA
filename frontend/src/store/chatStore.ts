@@ -20,11 +20,13 @@ interface ChatStore {
   messages: ChatMessage[];
   isStreaming: boolean;
   selectedModel: AuraModelId;
+  activeRoutedModel: string | null;
   liveTps: number;
   peakTps: number;
   contextWindowLabel: string;
   addMessage: (sender: 'user' | 'aura', text: string, modelUsed?: string, tps?: number) => void;
-  appendStreamChunk: (chunk: string, currentTps?: number) => void;
+  appendStreamChunk: (chunk: string, currentTps?: number, routedModel?: string) => void;
+  setActiveRoutedModel: (model: string | null) => void;
   setStreaming: (streaming: boolean) => void;
   setSelectedModel: (model: AuraModelId) => void;
   setLiveTps: (tps: number) => void;
@@ -52,32 +54,45 @@ export const MODEL_CATALOG: Record<
   'qwen2.5:0.5b': {
     label: 'Qwen 2.5 Turbo (0.5B Local)',
     short: 'Qwen 2.5 Turbo',
-    context: '32,768 Tokens',
+    context: '2,048 Tokens',
     badgeColor: 'cyan',
     desc: 'Ultra-low latency local FlashAttention generation (150–385 TPS)'
   },
   'qwen3.5:4b': {
     label: 'Qwen 3.5 Voice Core (4B Local)',
     short: 'Qwen 3.5 4B',
-    context: '131,072 Tokens',
+    context: '4,096 / 1,536 Voice',
     badgeColor: 'purple',
-    desc: 'Balanced conversational & voice synthesis core with 128K context'
+    desc: 'Balanced conversational & voice synthesis core'
   },
   'deepseek-r1:14b': {
     label: 'DeepSeek R1 Reasoning (14B)',
     short: 'DeepSeek R1 14B',
-    context: '131,072 Tokens',
+    context: '32,768 Tokens',
     badgeColor: 'amber',
     desc: 'Chain-of-thought mathematical, algorithmic & multi-file code solver'
   }
 };
+
+export function formatModelBadge(modelId?: string | null, fallbackSelect?: AuraModelId): string {
+  if (modelId && modelId in MODEL_CATALOG) {
+    return MODEL_CATALOG[modelId as AuraModelId].short;
+  }
+  if (modelId && modelId.trim()) {
+    return modelId;
+  }
+  if (fallbackSelect && fallbackSelect in MODEL_CATALOG) {
+    return MODEL_CATALOG[fallbackSelect].short;
+  }
+  return 'Aura Core';
+}
 
 export const useChatStore = create<ChatStore>((set) => ({
   messages: [
     {
       id: 'init-1',
       sender: 'aura',
-      text: 'Aura v3.5 Holographic Core online. Hybrid RRF Context Engine (1M-token Nemotron 3 Ultra + 10M Episodic Vault) & FlashAttention Turbo (257–385 TPS) active.',
+      text: 'Aura v3.5 Holographic Core online. Hybrid RRF Context Engine & FlashAttention Turbo active.',
       timestamp: new Date().toLocaleTimeString(),
       modelUsed: 'Aura Smart Router',
       tps: 362.5
@@ -85,6 +100,7 @@ export const useChatStore = create<ChatStore>((set) => ({
   ],
   isStreaming: false,
   selectedModel: 'auto',
+  activeRoutedModel: null,
   liveTps: 362.5,
   peakTps: 385.2,
   contextWindowLabel: '1M / 10M Episodic',
@@ -93,7 +109,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       messages: [
         ...state.messages,
         {
-          id: Math.random().toString(36).substring(7),
+          id: Math.random().toString(36).substring(2, 9),
           sender,
           text,
           timestamp: new Date().toLocaleTimeString(),
@@ -102,36 +118,49 @@ export const useChatStore = create<ChatStore>((set) => ({
         }
       ]
     })),
-  appendStreamChunk: (chunk, currentTps) =>
+  setActiveRoutedModel: (activeRoutedModel) => set({ activeRoutedModel }),
+  appendStreamChunk: (chunk, currentTps, routedModel) =>
     set((state) => {
-      const msgs = [...state.messages];
-      const last = msgs[msgs.length - 1];
-      const activeModelLabel = MODEL_CATALOG[state.selectedModel]?.short || 'Aura Core';
       const updatedTps = currentTps && currentTps > 0 ? currentTps : state.liveTps;
       const newPeak = Math.max(state.peakTps, updatedTps);
+      const effectiveRouted = routedModel || state.activeRoutedModel;
+      const resolvedModelLabel = formatModelBadge(effectiveRouted, state.selectedModel);
+
+      const lastIdx = state.messages.length - 1;
+      const last = lastIdx >= 0 ? state.messages[lastIdx] : undefined;
 
       if (last && last.sender === 'aura') {
-        last.text += chunk;
-        last.modelUsed = activeModelLabel;
-        last.tps = updatedTps;
-        return { messages: msgs, liveTps: updatedTps, peakTps: newPeak };
-      } else {
+        const updatedMessage: ChatMessage = {
+          ...last,
+          text: last.text + chunk,
+          modelUsed: resolvedModelLabel,
+          tps: updatedTps
+        };
+        const nextMessages = state.messages.slice(0, lastIdx);
+        nextMessages.push(updatedMessage);
         return {
+          messages: nextMessages,
+          activeRoutedModel: effectiveRouted || state.activeRoutedModel,
           liveTps: updatedTps,
-          peakTps: newPeak,
-          messages: [
-            ...msgs,
-            {
-              id: Math.random().toString(36).substring(7),
-              sender: 'aura',
-              text: chunk,
-              timestamp: new Date().toLocaleTimeString(),
-              modelUsed: activeModelLabel,
-              tps: updatedTps
-            }
-          ]
+          peakTps: newPeak
         };
       }
+
+      const newMessage: ChatMessage = {
+        id: Math.random().toString(36).substring(2, 9),
+        sender: 'aura',
+        text: chunk,
+        timestamp: new Date().toLocaleTimeString(),
+        modelUsed: resolvedModelLabel,
+        tps: updatedTps
+      };
+
+      return {
+        liveTps: updatedTps,
+        peakTps: newPeak,
+        activeRoutedModel: effectiveRouted || state.activeRoutedModel,
+        messages: [...state.messages, newMessage]
+      };
     }),
   setStreaming: (isStreaming) => set({ isStreaming }),
   setSelectedModel: (selectedModel) =>
@@ -144,5 +173,5 @@ export const useChatStore = create<ChatStore>((set) => ({
       liveTps,
       peakTps: Math.max(s.peakTps, liveTps)
     })),
-  clearChat: () => set({ messages: [] })
+  clearChat: () => set({ messages: [], activeRoutedModel: null })
 }));

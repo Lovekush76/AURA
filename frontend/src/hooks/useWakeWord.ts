@@ -3,22 +3,26 @@ import { useVoiceStore } from '../store/voiceStore';
 import { useChatStore } from '../store/chatStore';
 import { useLocationStore } from '../store/locationStore';
 import { getAuthHeaders, getAuraSessionId } from '../config/api';
+import { consumeAuraSseStream } from '../utils/sseStream';
 
 // Strict wake-word regex: matches "Hey Aura", "Hi Aura", "OK Aura", "Hello Aura", or utterance starting with "Aura"
 const WAKE_WORD_REGEX = /\b(?:hey|hi|ok|okay|hello)\s+aura\b|^aura\b/i;
 
 export const useWakeWord = () => {
-  const {
-    wakeWordEnabled,
-    setWakeWordStatus,
-    setVoiceState,
-    setMicActive,
-    playWakeAcknowledgement,
-    speakText
-  } = useVoiceStore();
+  const wakeWordEnabled = useVoiceStore((s) => s.wakeWordEnabled);
+  const setWakeWordStatus = useVoiceStore((s) => s.setWakeWordStatus);
+  const setVoiceState = useVoiceStore((s) => s.setVoiceState);
+  const setMicActive = useVoiceStore((s) => s.setMicActive);
+  const playWakeAcknowledgement = useVoiceStore((s) => s.playWakeAcknowledgement);
+  const speakText = useVoiceStore((s) => s.speakText);
 
-  const { selectedModel, addMessage, appendStreamChunk, setStreaming } = useChatStore();
-  const { location } = useLocationStore();
+  const selectedModel = useChatStore((s) => s.selectedModel);
+  const addMessage = useChatStore((s) => s.addMessage);
+  const appendStreamChunk = useChatStore((s) => s.appendStreamChunk);
+  const setActiveRoutedModel = useChatStore((s) => s.setActiveRoutedModel);
+  const setStreaming = useChatStore((s) => s.setStreaming);
+
+  const location = useLocationStore((s) => s.location);
 
   const recognitionRef = useRef<any>(null);
   const commandRecognitionRef = useRef<any>(null);
@@ -27,7 +31,7 @@ export const useWakeWord = () => {
   const audioContextRef = useRef<AudioContext | null>(null);
   const animFrameRef = useRef<number | null>(null);
 
-  // Send voice query to backend with channel: 'voice', session_id, override_model, and live TPS calculation
+  // Send voice query to backend using shared SSE parser & rAF token batcher
   const dispatchVoiceQuery = useCallback(
     async (queryText: string) => {
       if (!queryText.trim()) {
@@ -36,14 +40,11 @@ export const useWakeWord = () => {
         return;
       }
 
+      setActiveRoutedModel(null);
       addMessage('user', queryText);
       setStreaming(true);
       setVoiceState('transcribing');
       setWakeWordStatus('idle', 'Transcribing & routing prompt...');
-
-      let fullResponse = '';
-      let tokenCount = 0;
-      const t0 = performance.now();
 
       try {
         const response = await fetch('/api/v1/chat/stream', {
@@ -58,55 +59,17 @@ export const useWakeWord = () => {
           })
         });
 
-        if (!response.body) throw new Error('No response stream');
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const parts = buffer.split('\n\n');
-          buffer = parts.pop() || '';
-
-          for (const part of parts) {
-            const trimmed = part.trim();
-            if (!trimmed) continue;
-            for (const line of trimmed.split('\n')) {
-              if (line.startsWith('data: ')) {
-                try {
-                  const data = JSON.parse(line.slice(6));
-                  if (data.type === 'token') {
-                    fullResponse += data.content;
-                    tokenCount += Math.max(1, Math.ceil(data.content.length / 3.8));
-                    const dtSec = Math.max(0.015, (performance.now() - t0) / 1000);
-                    const measuredTps = Math.min(395.0, Math.max(45.0, tokenCount / dtSec));
-                    appendStreamChunk(data.content, measuredTps);
-                  }
-                } catch {}
-              }
-            }
+        const fullResponse = await consumeAuraSseStream(response, {
+          onRouting: (evt) => {
+            setActiveRoutedModel(evt.model);
+          },
+          onTokenBatch: (batchText, measuredTps, routedModel) => {
+            appendStreamChunk(batchText, measuredTps, routedModel);
+          },
+          onError: (errMsg) => {
+            appendStreamChunk(`\n[Voice Stream Error: ${errMsg}]`);
           }
-        }
-
-        if (buffer.trim()) {
-          for (const line of buffer.trim().split('\n')) {
-            if (line.startsWith('data: ')) {
-              try {
-                const data = JSON.parse(line.slice(6));
-                if (data.type === 'token') {
-                  fullResponse += data.content;
-                  tokenCount += Math.max(1, Math.ceil(data.content.length / 3.8));
-                  const dtSec = Math.max(0.015, (performance.now() - t0) / 1000);
-                  const measuredTps = Math.min(395.0, Math.max(45.0, tokenCount / dtSec));
-                  appendStreamChunk(data.content, measuredTps);
-                }
-              } catch {}
-            }
-          }
-        }
+        });
 
         if (fullResponse.trim()) {
           setVoiceState('speaking');
@@ -130,6 +93,7 @@ export const useWakeWord = () => {
     [
       addMessage,
       appendStreamChunk,
+      setActiveRoutedModel,
       setStreaming,
       setVoiceState,
       setWakeWordStatus,
@@ -139,7 +103,6 @@ export const useWakeWord = () => {
     ]
   );
 
-  // Capture the actual command after "Hey Aura" acknowledgment
   const startCommandCapture = useCallback(
     (initialCommand?: string) => {
       if (initialCommand && initialCommand.trim().length > 2) {
@@ -210,7 +173,6 @@ export const useWakeWord = () => {
     [dispatchVoiceQuery, setMicActive, setVoiceState, setWakeWordStatus]
   );
 
-  // Main Continuous Wake-Word Detection Loop
   const initWakeWordLoop = useCallback(() => {
     const SpeechRec =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;

@@ -10,11 +10,11 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from aura_assistant.container import get_container
 from aura_assistant.api.routers import chat, voice_ipc, workspace
+from aura_assistant.core.db.session import init_db
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("aura-app-core")
 
-from aura_assistant.core.db.session import init_db
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -24,14 +24,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Database initialization warning: {e}")
     container = get_container()
-    # Attempt to pre-warm pinned models
     try:
         await container.llm_router.warm_pinned_models()
     except Exception as e:
         logger.warning(f"Model pre-warm warning (Ollama might be offline): {e}")
     logger.info("Aura Core is ready.")
     yield
-    logger.info("Shutting down Aura Core Engine...")
+    logger.info("Shutting down Aura Core Engine & closing shared HTTP/background pools...")
+    try:
+        await container.aclose()
+    except Exception as e:
+        logger.warning(f"Shutdown cleanup warning: {e}")
+
 
 app = FastAPI(
     title="Aura Assistant Core API",
@@ -54,10 +58,13 @@ app.include_router(chat.router)
 app.include_router(voice_ipc.router)
 app.include_router(workspace.router)
 
+
 @app.get("/health")
 async def health_check():
     container = get_container()
     ollama_ok = await container.ollama_provider.check_health()
+    if ollama_ok:
+        await container.llm_router.get_running_models()
     vram_status = container.vram_arbiter.get_telemetry()
     return {
         "status": "online",

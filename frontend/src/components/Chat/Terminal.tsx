@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, type FormEvent } from 'react';
+import { memo, useState, useRef, useEffect, useCallback, type FormEvent } from 'react';
 import {
   Send,
   Loader2,
@@ -11,54 +11,182 @@ import {
   Radio,
   Zap,
   Database,
-  Cpu
+  Cpu,
+  ArrowDown
 } from 'lucide-react';
-import { useChatStore, MODEL_CATALOG, type AuraModelId } from '../../store/chatStore';
+import {
+  useChatStore,
+  MODEL_CATALOG,
+  type AuraModelId,
+  type ChatMessage
+} from '../../store/chatStore';
 import { useLocationStore } from '../../store/locationStore';
 import { useVoiceStore } from '../../store/voiceStore';
 import { useWakeWord } from '../../hooks/useWakeWord';
 import { getAuthHeaders, getAuraSessionId } from '../../config/api';
+import { consumeAuraSseStream } from '../../utils/sseStream';
+
+const AUTO_SCROLL_THRESHOLD_PX = 80;
+
+interface MessageRowProps {
+  message: ChatMessage;
+  isCopied: boolean;
+  onCopy: (id: string, text: string) => void;
+  onSpeak: (text: string) => void;
+}
+
+const MessageRow = memo(({ message: m, isCopied, onCopy, onSpeak }: MessageRowProps) => {
+  return (
+    <div
+      className={`flex flex-col ${
+        m.sender === 'aura' ? 'items-start' : 'items-end'
+      }`}
+    >
+      <div
+        className={`max-w-[90%] sm:max-w-[85%] rounded-2xl p-4 sm:p-5 border transition-all text-sm leading-relaxed ${
+          m.sender === 'aura'
+            ? 'bg-white/[0.04] border-white/[0.08] text-[#E0E0EC] shadow-[0_4px_20px_rgba(0,0,0,0.2)]'
+            : 'bg-cyan-500/15 border-cyan-400/30 text-cyan-100 shadow-[0_0_20px_rgba(0,240,255,0.1)]'
+        }`}
+      >
+        <div className="flex items-center justify-between gap-4 mb-2 pb-2 border-b border-white/[0.06]">
+          <div className="flex items-center gap-2 flex-wrap">
+            {m.sender === 'aura' ? (
+              <div className="flex items-center gap-1.5 text-cyan-400 font-semibold text-xs">
+                <Sparkles size={13} />
+                <span>aura.</span>
+              </div>
+            ) : (
+              <span className="text-cyan-300 font-semibold text-xs">user</span>
+            )}
+            <span className="text-[10px] text-white/30 font-mono">{m.timestamp}</span>
+
+            {m.sender === 'aura' && m.modelUsed && (
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-cyan-500/10 border border-cyan-400/20 text-cyan-300">
+                {m.modelUsed}
+              </span>
+            )}
+
+            {m.sender === 'aura' && m.tps && (
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-400/20 text-amber-300 flex items-center gap-1">
+                <Zap size={9} />
+                {m.tps.toFixed(1)} TPS
+              </span>
+            )}
+          </div>
+
+          {m.sender === 'aura' && (
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => onSpeak(m.text)}
+                title="Listen with pleasant voice"
+                className="p-1 rounded-lg hover:bg-white/10 text-white/40 hover:text-purple-300 transition-colors cursor-pointer"
+              >
+                <Volume2 size={13} />
+              </button>
+              <button
+                type="button"
+                onClick={() => onCopy(m.id, m.text)}
+                title="Copy text"
+                className="p-1 rounded-lg hover:bg-white/10 text-white/40 hover:text-cyan-300 transition-colors cursor-pointer"
+              >
+                {isCopied ? (
+                  <Check size={13} className="text-green-400" />
+                ) : (
+                  <Copy size={13} />
+                )}
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="whitespace-pre-wrap font-sans text-sm sm:text-base leading-relaxed break-words">
+          {m.text}
+        </div>
+      </div>
+    </div>
+  );
+});
+
+MessageRow.displayName = 'MessageRow';
 
 export const Terminal = () => {
-  const {
-    messages,
-    isStreaming,
-    selectedModel,
-    setSelectedModel,
-    liveTps,
-    peakTps,
-    addMessage,
-    appendStreamChunk,
-    setStreaming
-  } = useChatStore();
-  const { location } = useLocationStore();
-  const {
-    selectedVoiceName,
-    voiceState,
-    isMicActive,
-    wakeWordStatus,
-    wakeWordMessage,
-    wakeWordEnabled,
-    isAutoSpeakChat,
-    setIsAutoSpeakChat,
-    speakText
-  } = useVoiceStore();
+  // Granular store selectors
+  const messages = useChatStore((s) => s.messages);
+  const isStreaming = useChatStore((s) => s.isStreaming);
+  const selectedModel = useChatStore((s) => s.selectedModel);
+  const activeRoutedModel = useChatStore((s) => s.activeRoutedModel);
+  const setSelectedModel = useChatStore((s) => s.setSelectedModel);
+  const setActiveRoutedModel = useChatStore((s) => s.setActiveRoutedModel);
+  const liveTps = useChatStore((s) => s.liveTps);
+  const peakTps = useChatStore((s) => s.peakTps);
+  const addMessage = useChatStore((s) => s.addMessage);
+  const appendStreamChunk = useChatStore((s) => s.appendStreamChunk);
+  const setStreaming = useChatStore((s) => s.setStreaming);
+
+  const location = useLocationStore((s) => s.location);
+
+  const selectedVoiceName = useVoiceStore((s) => s.selectedVoiceName);
+  const voiceState = useVoiceStore((s) => s.voiceState);
+  const isMicActive = useVoiceStore((s) => s.isMicActive);
+  const wakeWordStatus = useVoiceStore((s) => s.wakeWordStatus);
+  const wakeWordMessage = useVoiceStore((s) => s.wakeWordMessage);
+  const wakeWordEnabled = useVoiceStore((s) => s.wakeWordEnabled);
+  const isAutoSpeakChat = useVoiceStore((s) => s.isAutoSpeakChat);
+  const setIsAutoSpeakChat = useVoiceStore((s) => s.setIsAutoSpeakChat);
+  const speakText = useVoiceStore((s) => s.speakText);
 
   const { triggerManualVoice } = useWakeWord();
 
   const [inputVal, setInputVal] = useState('');
   const [elapsedSec, setElapsedSec] = useState(0);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const isNearBottomRef = useRef<boolean>(true);
+  const scrollRafRef = useRef<number | null>(null);
 
-  // Auto-scroll inside internal message viewport ONLY
+  const handleViewportScroll = useCallback(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const nearBottom = distanceFromBottom <= AUTO_SCROLL_THRESHOLD_PX;
+    isNearBottomRef.current = nearBottom;
+    setIsUserScrolledUp(!nearBottom);
+  }, []);
+
+  const scrollToBottom = useCallback((force = false) => {
+    if (!force && !isNearBottomRef.current) return;
+    if (scrollRafRef.current !== null) return;
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      const el = viewportRef.current;
+      if (el && (force || isNearBottomRef.current)) {
+        el.scrollTop = el.scrollHeight;
+        isNearBottomRef.current = true;
+        setIsUserScrolledUp(false);
+      }
+    });
+  }, []);
+
+  // Batched auto-scroll only when user is within 80px of bottom
   useEffect(() => {
-    if (viewportRef.current) {
-      viewportRef.current.scrollTop = viewportRef.current.scrollHeight;
-    }
-  }, [messages, isStreaming]);
+    scrollToBottom(false);
+  }, [messages, scrollToBottom]);
+
+  useEffect(() => {
+    return () => {
+      if (scrollRafRef.current !== null) {
+        cancelAnimationFrame(scrollRafRef.current);
+      }
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
+  }, []);
 
   // Elapsed timer during streaming
   useEffect(() => {
@@ -84,21 +212,27 @@ export const Terminal = () => {
     setStreaming(false);
   };
 
-  const handleCopy = (id: string, text: string) => {
+  const handleCopy = useCallback((id: string, text: string) => {
     navigator.clipboard.writeText(text);
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
-  };
+  }, []);
+
+  const handleSpeak = useCallback(
+    (text: string) => {
+      speakText(text);
+    },
+    [speakText]
+  );
 
   const sendQuery = async (queryText: string) => {
+    setActiveRoutedModel(null);
     addMessage('user', queryText);
     setStreaming(true);
+    scrollToBottom(true);
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
-    let fullResponse = '';
-    let tokenCount = 0;
-    const t0 = performance.now();
 
     try {
       const response = await fetch('/api/v1/chat/stream', {
@@ -114,57 +248,22 @@ export const Terminal = () => {
         signal: controller.signal
       });
 
-      if (!response.body) throw new Error('ReadableStream not supported');
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const parts = buffer.split('\n\n');
-        buffer = parts.pop() || '';
-
-        for (const part of parts) {
-          const trimmed = part.trim();
-          if (!trimmed) continue;
-          for (const line of trimmed.split('\n')) {
-            if (line.startsWith('data: ')) {
-              try {
-                const data = JSON.parse(line.slice(6));
-                if (data.type === 'token') {
-                  fullResponse += data.content;
-                  tokenCount += Math.max(1, Math.ceil(data.content.length / 3.8));
-                  const dtSec = Math.max(0.015, (performance.now() - t0) / 1000);
-                  const measuredTps = Math.min(395.0, Math.max(45.0, tokenCount / dtSec));
-                  appendStreamChunk(data.content, measuredTps);
-                }
-              } catch {}
-            }
+      const fullResponse = await consumeAuraSseStream(
+        response,
+        {
+          onRouting: (evt) => {
+            setActiveRoutedModel(evt.model);
+          },
+          onTokenBatch: (batchText, measuredTps, routedModel) => {
+            appendStreamChunk(batchText, measuredTps, routedModel);
+          },
+          onError: (errMsg) => {
+            appendStreamChunk(`\n[Stream Error: ${errMsg}]`);
           }
-        }
-      }
+        },
+        controller.signal
+      );
 
-      if (buffer.trim()) {
-        for (const line of buffer.trim().split('\n')) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6));
-              if (data.type === 'token') {
-                fullResponse += data.content;
-                tokenCount += Math.max(1, Math.ceil(data.content.length / 3.8));
-                const dtSec = Math.max(0.015, (performance.now() - t0) / 1000);
-                const measuredTps = Math.min(395.0, Math.max(45.0, tokenCount / dtSec));
-                appendStreamChunk(data.content, measuredTps);
-              }
-            } catch {}
-          }
-        }
-      }
-
-      // Requirement: Voice back ONLY if enabled in chat, otherwise completely silent!
       if (isAutoSpeakChat && fullResponse.trim()) {
         speakText(fullResponse.trim());
       }
@@ -214,6 +313,11 @@ export const Terminal = () => {
               </option>
             ))}
           </select>
+          {activeRoutedModel && (
+            <span className="hidden md:inline-flex text-[10px] font-mono px-2 py-0.5 rounded bg-cyan-500/15 border border-cyan-400/30 text-cyan-300">
+              Active: {activeRoutedModel}
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-2.5 text-[11px] font-mono flex-wrap">
@@ -256,13 +360,13 @@ export const Terminal = () => {
         </div>
       )}
 
-      {/* Main Conversation Stream Viewport (Dynamic Fluid Height) */}
+      {/* Main Conversation Stream Viewport */}
       <div
         ref={viewportRef}
+        onScroll={handleViewportScroll}
         className="flex-1 overflow-y-auto px-3 sm:px-6 md:px-8 py-4 sm:py-6 space-y-4 min-h-0"
       >
         <div className="max-w-4xl xl:max-w-5xl mx-auto w-full space-y-4">
-          {/* Welcome Banner when conversation is clean */}
           {messages.length <= 1 && (
             <div className="py-6 sm:py-10 flex flex-col items-center justify-center text-center space-y-3">
               <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-3xl bg-gradient-to-tr from-cyan-500/20 to-purple-500/20 border border-cyan-400/30 flex items-center justify-center text-cyan-300 shadow-[0_0_30px_rgba(0,240,255,0.2)]">
@@ -272,7 +376,7 @@ export const Terminal = () => {
                 Aura Assistant <span className="text-cyan-400">v3.5</span>
               </h1>
               <p className="text-xs sm:text-sm text-white/50 max-w-lg leading-relaxed">
-                Sovereign local AI workspace running 100% locally on your machine with Hybrid RRF Context (`1M` Nemotron 3 Ultra + `10M` Episodic Vault) and FlashAttention (`257–385 TPS`).
+                Sovereign local AI workspace with Hybrid RRF Context, single-gate VRAM residency, and 60fps batched token streaming.
                 {wakeWordEnabled && (
                   <span className="text-emerald-400 block mt-1 font-mono text-xs">
                     ✨ Hands-Free Mode Active: Just say &quot;Hey Aura&quot; to speak!
@@ -282,89 +386,35 @@ export const Terminal = () => {
             </div>
           )}
 
-          {/* Messages */}
           {messages.map((m) => (
-            <div
+            <MessageRow
               key={m.id}
-              className={`flex flex-col ${
-                m.sender === 'aura' ? 'items-start' : 'items-end'
-              }`}
-            >
-              <div
-                className={`max-w-[90%] sm:max-w-[85%] rounded-2xl p-4 sm:p-5 border transition-all text-sm leading-relaxed ${
-                  m.sender === 'aura'
-                    ? 'bg-white/[0.04] border-white/[0.08] text-[#E0E0EC] shadow-[0_4px_20px_rgba(0,0,0,0.2)]'
-                    : 'bg-cyan-500/15 border-cyan-400/30 text-cyan-100 shadow-[0_0_20px_rgba(0,240,255,0.1)]'
-                }`}
-              >
-                {/* Message Header */}
-                <div className="flex items-center justify-between gap-4 mb-2 pb-2 border-b border-white/[0.06]">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    {m.sender === 'aura' ? (
-                      <div className="flex items-center gap-1.5 text-cyan-400 font-semibold text-xs">
-                        <Sparkles size={13} />
-                        <span>aura.</span>
-                      </div>
-                    ) : (
-                      <span className="text-cyan-300 font-semibold text-xs">user</span>
-                    )}
-                    <span className="text-[10px] text-white/30 font-mono">{m.timestamp}</span>
-
-                    {m.sender === 'aura' && m.modelUsed && (
-                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-cyan-500/10 border border-cyan-400/20 text-cyan-300">
-                        {m.modelUsed}
-                      </span>
-                    )}
-
-                    {m.sender === 'aura' && m.tps && (
-                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-400/20 text-amber-300 flex items-center gap-1">
-                        <Zap size={9} />
-                        {m.tps.toFixed(1)} TPS
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Actions: Listen / Copy */}
-                  {m.sender === 'aura' && (
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() => speakText(m.text)}
-                        title="Listen with pleasant girl voice"
-                        className="p-1 rounded-lg hover:bg-white/10 text-white/40 hover:text-purple-300 transition-colors cursor-pointer"
-                      >
-                        <Volume2 size={13} />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleCopy(m.id, m.text)}
-                        title="Copy text"
-                        className="p-1 rounded-lg hover:bg-white/10 text-white/40 hover:text-cyan-300 transition-colors cursor-pointer"
-                      >
-                        {copiedId === m.id ? (
-                          <Check size={13} className="text-green-400" />
-                        ) : (
-                          <Copy size={13} />
-                        )}
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                {/* Message Content */}
-                <div className="whitespace-pre-wrap font-sans text-sm sm:text-base leading-relaxed break-words">
-                  {m.text}
-                </div>
-              </div>
-            </div>
+              message={m}
+              isCopied={copiedId === m.id}
+              onCopy={handleCopy}
+              onSpeak={handleSpeak}
+            />
           ))}
         </div>
       </div>
 
+      {/* Floating Jump-to-Latest Button when User Scrolls Up */}
+      {isUserScrolledUp && (
+        <div className="absolute bottom-28 right-6 z-30">
+          <button
+            type="button"
+            onClick={() => scrollToBottom(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-cyan-500/20 border border-cyan-400/40 text-cyan-200 text-xs font-mono shadow-lg backdrop-blur-md hover:bg-cyan-500/30 transition-all cursor-pointer"
+          >
+            <ArrowDown size={13} />
+            <span>Jump to latest</span>
+          </button>
+        </div>
+      )}
+
       {/* Dynamic Bottom Controls Dock */}
       <div className="p-3 sm:p-5 bg-gradient-to-t from-[#08080C] via-[#08080C]/90 to-transparent border-t border-white/[0.06] shrink-0">
         <div className="max-w-4xl xl:max-w-5xl mx-auto w-full space-y-2.5">
-          {/* Progress Telemetry Banner */}
           {isStreaming && (
             <div className="py-2 px-4 rounded-xl bg-cyan-500/10 border border-cyan-400/25 flex items-center justify-between text-xs text-cyan-300 animate-pulse">
               <div className="flex items-center gap-2.5">
@@ -387,7 +437,6 @@ export const Terminal = () => {
             </div>
           )}
 
-          {/* Prompt Chips */}
           {!isStreaming && (
             <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-1">
               <button
@@ -433,12 +482,10 @@ export const Terminal = () => {
             </div>
           )}
 
-          {/* Interactive Input Dock */}
           <form
             onSubmit={handleSend}
             className="flex items-center gap-2 bg-white/[0.04] border border-white/[0.1] rounded-2xl p-1.5 sm:p-2 focus-within:border-cyan-400/60 focus-within:shadow-[0_0_20px_rgba(0,240,255,0.15)] transition-all"
           >
-            {/* Microphone Button (Manual / Hands-free) */}
             <button
               type="button"
               onClick={triggerManualVoice}
@@ -456,7 +503,6 @@ export const Terminal = () => {
               <Mic size={18} />
             </button>
 
-            {/* Main Text Input */}
             <input
               type="text"
               value={inputVal}
@@ -466,7 +512,6 @@ export const Terminal = () => {
               className="flex-1 bg-transparent px-2 sm:px-3 py-2 text-sm sm:text-base text-white placeholder-white/30 focus:outline-none disabled:opacity-50 min-w-0"
             />
 
-            {/* Voice-Back Chat Policy Toggle */}
             <button
               type="button"
               onClick={() => setIsAutoSpeakChat(!isAutoSpeakChat)}
@@ -487,7 +532,6 @@ export const Terminal = () => {
               </span>
             </button>
 
-            {/* Send / In Progress Button */}
             {isStreaming ? (
               <button
                 type="button"

@@ -66,8 +66,12 @@ async def update_profile_endpoint(
     user: str = Depends(verify_auth_token)
 ):
     container = get_container()
-    updates = req.model_dump(exclude_none=True)
-    for key, val in updates.items():
-        if isinstance(val, str) and val.strip():
-            container.episodic_memory.save_profile_fact(key, val.strip())
+    updates = {
+        k: v.strip()
+        for k, v in req.model_dump(exclude_none=True).items()
+        if isinstance(v, str) and v.strip()
+    }
+    if updates:
+        container.episodic_memory.update_profile_facts(updates, persist_sync=True)
     return {"ok": True, "profile": container.episodic_memory.get_profile()}
+
