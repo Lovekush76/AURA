@@ -17,9 +17,10 @@ class LLMRouter:
         self.ollama_host = ollama_host
         self.slots = {
             "voice": {"model": "qwen3.5:4b", "ctx": 1536, "temp": 0.4, "pinned": True},
-            "chat": {"model": "qwen2.5:0.5b", "ctx": 1024, "temp": 0.5, "pinned": True},
-            "code": {"model": "qwen3-coder:30b", "ctx": 2048, "temp": 0.2, "pinned": False},
-            "reasoning": {"model": "deepseek-r1:14b", "ctx": 2048, "temp": 0.5, "pinned": False}
+            "chat": {"model": "qwen2.5:0.5b", "ctx": 2048, "temp": 0.5, "pinned": True},
+            "code": {"model": "qwen3-coder:30b", "ctx": 32768, "temp": 0.2, "pinned": False},
+            "reasoning": {"model": "deepseek-r1:14b", "ctx": 32768, "temp": 0.5, "pinned": False},
+            "ultra": {"model": "nvidia/nemotron-3-ultra", "ctx": 1000000, "temp": 0.3, "pinned": False}
         }
         self.current_heavy_model: Optional[str] = None
         self._cached_available_models: Optional[set] = None
@@ -64,8 +65,17 @@ class LLMRouter:
         default_model = self.slots["voice"]["model"] if self.slots["voice"]["model"] in available or not available else "qwen3.5:4b"
 
         if override_model:
+            if "nemotron" in override_model.lower() or override_model.startswith("nvidia/"):
+                ultra_cfg = self.slots["ultra"]
+                return RouteResult(
+                    model=override_model if "/" in override_model else ultra_cfg["model"],
+                    num_ctx=ultra_cfg["ctx"],
+                    temperature=ultra_cfg["temp"],
+                    pinned=False,
+                    reasoning_mode=True
+                )
             model_to_use = override_model if (not available or override_model in available) else default_model
-            return RouteResult(model=model_to_use, num_ctx=4096, temperature=0.7, pinned=False, reasoning_mode=False)
+            return RouteResult(model=model_to_use, num_ctx=32768, temperature=0.7, pinned=False, reasoning_mode=False)
 
         # Modality enforcement: Voice channel must never experience cold model swaps
         if channel == "voice":

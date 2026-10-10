@@ -16,9 +16,15 @@ routing:
     residency: "on_demand"
   reasoning:
     primary: "deepseek-r1:14b"
-    fallback: ["deepseek-r1:8b"]
+    fallback: ["deepseek-r1:8b", "qwen2.5:0.5b"]
     vram_budget_mb: 9500
     residency: "on_demand"
+  ultra:
+    primary: "nvidia/nemotron-3-ultra"
+    fallback: ["nemotron-mini:4b", "qwen2.5:0.5b"]
+    context_window: 1000000
+    architecture: "LatentMoE-Mamba2-550B-A55B"
+    residency: "hybrid_nim"
   embedding:
     primary: "nomic-embed-text"
     dimensions: 768

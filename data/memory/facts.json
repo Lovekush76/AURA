@@ -27,22 +27,22 @@
   {
     "category": "profile",
     "key": "location",
-    "fact": "User location: Hoskote, Karnataka, India",
+    "fact": "User location: Bengaluru, Karnataka, India",
     "source": "system",
-    "updated_at": "2026-10-09T20:55:13.106920"
+    "updated_at": "2026-10-10T21:41:38.407379"
   },
   {
     "category": "profile",
     "key": "coordinates",
-    "fact": "User coordinates: 13.0721, 77.7922",
+    "fact": "User coordinates: 12.983548732772856, 77.73159746554572",
     "source": "system",
-    "updated_at": "2026-10-09T20:55:13.119468"
+    "updated_at": "2026-10-10T21:41:38.412612"
   },
   {
     "category": "profile",
     "key": "timezone",
     "fact": "User timezone: Asia/Calcutta",
     "source": "system",
-    "updated_at": "2026-10-09T20:55:13.125702"
+    "updated_at": "2026-10-10T21:41:38.418957"
   }
 ]

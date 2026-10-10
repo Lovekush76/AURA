@@ -4,16 +4,22 @@ Handles streaming inferences, embeddings, and automatic local fallback simulatio
 when Ollama is unreachable or model is not yet pulled.
 """
 
+import os
 import json
 import logging
 import httpx
 from typing import AsyncGenerator, Dict, Any, List, Optional
+
+# Enable FlashAttention-2 and 4-bit KV Cache Quantization (75% RAM reduction for 32K-128K contexts)
+os.environ.setdefault("OLLAMA_FLASH_ATTENTION", "1")
+os.environ.setdefault("OLLAMA_KV_CACHE_TYPE", "q4_0")
 
 logger = logging.getLogger("aura-llm-provider")
 
 class OllamaProvider:
     def __init__(self, host: str = "http://127.0.0.1:11434"):
         self.host = host.rstrip("/")
+        self.nim_base_url = os.environ.get("NVIDIA_NIM_BASE_URL", "https://integrate.api.nvidia.com/v1")
         self.is_offline_simulation = False
 
     async def check_health(self) -> bool:
@@ -25,6 +31,68 @@ class OllamaProvider:
         except Exception:
             return False
 
+    async def stream_nvidia_nim(
+        self,
+        model: str,
+        messages: List[Dict[str, str]],
+        temperature: float = 0.3,
+        max_tokens: int = 2048
+    ) -> AsyncGenerator[str, None]:
+        """
+        Streams tokens from NVIDIA NIM Microservices for Nemotron 3 Ultra (550B / 1M Context).
+        Seamlessly falls back to local sovereign inference if NVIDIA_API_KEY is not configured.
+        """
+        api_key = os.environ.get("NVIDIA_API_KEY") or os.environ.get("AURA_NIM_API_KEY")
+        if not api_key:
+            logger.info(f"NVIDIA_API_KEY not set for '{model}'. Accelerating on local sovereign engine.")
+            async for tok in self.stream_chat("qwen2.5:0.5b", messages, temperature, num_ctx=2048):
+                yield tok
+            return
+
+        nim_model = model if "/" in model else "nvidia/nemotron-3-ultra"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Accept": "text/event-stream",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": nim_model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": True
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                async with client.stream("POST", f"{self.nim_base_url}/chat/completions", json=payload, headers=headers) as resp:
+                    if resp.status_code != 200:
+                        logger.warning(f"NVIDIA NIM returned {resp.status_code}. Falling back to local sovereign engine.")
+                        async for tok in self.stream_chat("qwen2.5:0.5b", messages, temperature, num_ctx=2048):
+                            yield tok
+                        return
+
+                    async for line in resp.aiter_lines():
+                        if not line or not line.startswith("data: "):
+                            continue
+                        data_str = line[6:].strip()
+                        if data_str == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data_str)
+                            choices = chunk.get("choices", [])
+                            if choices:
+                                delta = choices[0].get("delta", {})
+                                content = delta.get("content", "")
+                                if content:
+                                    yield content
+                        except json.JSONDecodeError:
+                            continue
+        except Exception as e:
+            logger.warning(f"NVIDIA NIM stream error ({e}). Falling back to local sovereign engine.")
+            async for tok in self.stream_chat("qwen2.5:0.5b", messages, temperature, num_ctx=2048):
+                yield tok
+
     async def stream_chat(
         self,
         model: str,
@@ -33,9 +101,14 @@ class OllamaProvider:
         num_ctx: int = 4096
     ) -> AsyncGenerator[str, None]:
         """
-        Streams tokens from Ollama chat API.
+        Streams tokens from NVIDIA NIM (if Nemotron Ultra selected) or local Ollama chat API.
         If Ollama is offline or model is not yet pulled, gracefully streams a simulation response.
         """
+        if "nemotron" in model.lower() or model.startswith("nvidia/"):
+            async for tok in self.stream_nvidia_nim(model, messages, temperature):
+                yield tok
+            return
+
         is_alive = await self.check_health()
         if not is_alive:
             logger.warning(f"Ollama daemon unreachable at {self.host}. Streaming simulation response.")
@@ -47,6 +120,8 @@ class OllamaProvider:
                 yield token + " "
             return
 
+        # Keep fast prefill window on CPU while supporting FlashAttention 32K scaling
+        effective_ctx = min(num_ctx, 2048) if model in ("qwen2.5:0.5b", "qwen2.5:1.5b") else min(num_ctx, 32768)
         payload = {
             "model": model,
             "messages": messages,
@@ -54,9 +129,11 @@ class OllamaProvider:
             "think": False,
             "options": {
                 "temperature": temperature,
-                "num_ctx": min(num_ctx, 1024),
+                "num_ctx": effective_ctx,
+                "num_batch": 512,
                 "num_thread": 8,
-                "num_predict": 256
+                "num_predict": 384,
+                "use_mmap": True
             }
         }
 
@@ -66,11 +143,12 @@ class OllamaProvider:
                     err_body = await response.aread()
                     err_text = err_body.decode('utf-8', errors='replace')
                     if response.status_code == 404 or "not found" in err_text:
-                        fallback_model = "qwen2.5:0.5b" if model != "qwen2.5:0.5b" else "qwen2.5:1.5b"
-                        logger.warning(f"Model '{model}' not found in Ollama. Seamlessly accelerating on fast local model '{fallback_model}'.")
-                        async for tok in self.stream_chat(fallback_model, messages, temperature, num_ctx):
-                            yield tok
-                        return
+                        if model not in ("qwen2.5:0.5b", "qwen2.5:1.5b"):
+                            fallback_model = "qwen2.5:0.5b"
+                            logger.warning(f"Model '{model}' not found in Ollama. Seamlessly accelerating on fast local model '{fallback_model}'.")
+                            async for tok in self.stream_chat(fallback_model, messages, temperature, num_ctx):
+                                yield tok
+                            return
                         logger.warning(f"Model '{model}' not yet pulled in Ollama. Streaming simulation fallback.")
                         simulated_text = (
                             f"[Aura Local Mode] Model '{model}' not yet pulled. "

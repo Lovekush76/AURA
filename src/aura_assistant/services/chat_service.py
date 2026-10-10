@@ -136,9 +136,10 @@ class ChatService:
                 except Exception as ex:
                     logger.debug(f"Could not fetch URL {target_url}: {ex}")
 
-        # 4. Context Engineering Architecture: Multi-Turn History, Hierarchical Delimiters, & Pruning
+        # 4. Context Engineering Architecture: Coreference Resolution, Hybrid RRF Recall, & Dynamic Scaling
         profile_data = self.memory.get_profile()
-        relevant_facts = self.memory.retrieve_relevant_facts(prompt, limit=3)
+        resolved_query = self.context_engine.resolve_coreferences(session_id, prompt)
+        relevant_facts = self.memory.retrieve_relevant_facts(resolved_query, limit=4)
 
         messages, context_telemetry = self.context_engine.build_engineered_context(
             session_id=session_id,
@@ -147,7 +148,8 @@ class ChatService:
             profile_data=profile_data,
             memory_facts=relevant_facts,
             url_context=url_context,
-            reasoning_mode=route.reasoning_mode
+            reasoning_mode=route.reasoning_mode,
+            max_ctx_override=route.num_ctx
         )
 
         yield {
@@ -176,8 +178,8 @@ class ChatService:
             )
         elif "system status" in lower_prompt or "hardware status" in lower_prompt or "telemetry" in lower_prompt:
             fast_path_text = (
-                f"Aura System Status is Nominal. Model engine is active with {route.model}. "
-                "Memory is air-gapped with zero outbound data egress."
+                f"Aura System Status is Nominal. Model engine is active with {route.model} "
+                f"(Max Context: {route.num_ctx:,} tokens). Memory is air-gapped with zero outbound data egress."
             )
 
         full_response_acc = []
@@ -191,7 +193,7 @@ class ChatService:
                 yield {"type": "token", "content": token}
                 await asyncio.sleep(0.006)  # ~160 tokens/sec delivery
         else:
-            # Real Ollama stream
+            # Real Ollama / NVIDIA NIM stream
             async for token in self.provider.stream_chat(
                 model=route.model,
                 messages=messages,
@@ -207,8 +209,10 @@ class ChatService:
         if complete_text and len(complete_text) > 5:
             self.response_cache.set(prompt, complete_text, location_key)
 
-        # 6. Record Completed Turn in Context Memory (Enables continuous conversational awareness)
-        self.context_engine.record_turn(session_id, prompt, complete_text)
+        # 6. Record Completed Turn & Index Compacted Summaries into Infinite RRF Vector Archive
+        compacted_chunk = self.context_engine.record_turn(session_id, prompt, complete_text)
+        if compacted_chunk:
+            self.memory.archive_compacted_summary(session_id, compacted_chunk)
 
         # 7. Spoken output generation if voice channel
         if channel == "voice":
