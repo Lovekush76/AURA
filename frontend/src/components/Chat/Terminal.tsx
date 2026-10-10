@@ -67,7 +67,23 @@ const MessageRow = memo(({ message: m, isCopied, onCopy, onSpeak }: MessageRowPr
               </span>
             )}
 
-            {m.sender === 'aura' && m.tps && (
+            {m.sender === 'aura' && m.responseSource && (
+              <span
+                className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${
+                  m.responseSource === 'live_model'
+                    ? 'bg-emerald-500/10 border-emerald-400/25 text-emerald-300'
+                    : m.responseSource === 'response_cache'
+                    ? 'bg-purple-500/10 border-purple-400/25 text-purple-300'
+                    : m.responseSource === 'deterministic_fast_path'
+                    ? 'bg-slate-500/15 border-slate-400/25 text-slate-300'
+                    : 'bg-rose-500/10 border-rose-400/25 text-rose-300'
+                }`}
+              >
+                src:{m.responseSource}
+              </span>
+            )}
+
+            {m.sender === 'aura' && m.tps && m.responseSource === 'live_model' && (
               <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-400/20 text-amber-300 flex items-center gap-1">
                 <Zap size={9} />
                 {m.tps.toFixed(1)} TPS
@@ -123,6 +139,7 @@ export const Terminal = () => {
   const peakTps = useChatStore((s) => s.peakTps);
   const addMessage = useChatStore((s) => s.addMessage);
   const appendStreamChunk = useChatStore((s) => s.appendStreamChunk);
+  const finalizeLastMessageDiagnostics = useChatStore((s) => s.finalizeLastMessageDiagnostics);
   const setStreaming = useChatStore((s) => s.setStreaming);
 
   const location = useLocationStore((s) => s.location);
@@ -254,8 +271,15 @@ export const Terminal = () => {
           onRouting: (evt) => {
             setActiveRoutedModel(evt.model);
           },
-          onTokenBatch: (batchText, measuredTps, routedModel) => {
-            appendStreamChunk(batchText, measuredTps, routedModel);
+          onTokenBatch: (batchText, measuredTps, routedModel, responseSource, cacheStatus) => {
+            appendStreamChunk(batchText, measuredTps, routedModel, responseSource, cacheStatus);
+          },
+          onDone: (_completeText, routedModel, doneEvent) => {
+            finalizeLastMessageDiagnostics(
+              routedModel,
+              doneEvent?.response_source,
+              doneEvent?.cache_status
+            );
           },
           onError: (errMsg) => {
             appendStreamChunk(`\n[Stream Error: ${errMsg}]`);

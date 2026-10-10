@@ -36,6 +36,8 @@ class OllamaProvider:
         self._owns_client: bool = http_client is None
         self.on_model_missing = on_model_missing
         self.last_usage_metrics: Dict[str, Any] = {}
+        self.last_response_source: str = "live_model"
+        self.last_submitted_messages: List[Dict[str, str]] = []
 
     def _get_client(self) -> httpx.AsyncClient:
         import asyncio
@@ -160,6 +162,7 @@ class OllamaProvider:
                                 yield content
                     except json.JSONDecodeError:
                         continue
+                self.last_response_source = "live_model"
         except Exception as e:
             logger.warning(f"NVIDIA NIM stream error ({e}). Falling back to local sovereign engine.")
             async for tok in self.stream_chat("qwen2.5:0.5b", messages, temperature, num_ctx=2048, keep_alive=-1):
@@ -178,6 +181,8 @@ class OllamaProvider:
         Streams tokens from NVIDIA NIM (if Nemotron Ultra selected) or local Ollama chat API.
         Uses the authoritative num_ctx and keep_alive resolved by LLMRouter.
         """
+        self.last_submitted_messages = list(messages)
+
         if "nemotron" in model.lower() or model.startswith("nvidia/"):
             async for tok in self.stream_nvidia_nim(model, messages, temperature):
                 yield tok
@@ -185,6 +190,7 @@ class OllamaProvider:
 
         is_alive = await self.check_health()
         if not is_alive:
+            self.last_response_source = "offline_fallback"
             logger.warning(f"Ollama daemon unreachable at {self.host}. Streaming simulation response.")
             simulated_text = (
                 f"[Aura Local Mode] Processed request using local fallback for model '{model}'. "
@@ -194,6 +200,7 @@ class OllamaProvider:
                 yield token + " "
             return
 
+        self.last_response_source = "live_model"
         effective_predict = num_predict or (1024 if num_ctx >= 16384 else 512)
 
         payload = {
@@ -231,6 +238,7 @@ class OllamaProvider:
                         async for tok in self.stream_chat(fallback_model, messages, temperature, num_ctx=2048, keep_alive=-1):
                             yield tok
                         return
+                    self.last_response_source = "offline_fallback"
                     logger.warning(f"Model '{model}' not yet pulled in Ollama. Streaming simulation fallback.")
                     simulated_text = (
                         f"[Aura Local Mode] Model '{model}' not yet pulled. "

@@ -1,7 +1,7 @@
 """
 Aura Assistant - Database Engine & Session Management
 Initializes SQLite database with WAL mode, foreign key enforcement,
-and thread-safe synchronous ORM helpers designed to be invoked via asyncio.to_thread.
+idempotent turn_id deduplication, and cross-worker read-after-write consistency.
 """
 
 from datetime import date
@@ -50,6 +50,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 _db_initialized = False
 _init_lock = threading.Lock()
+_write_lock = threading.Lock()
 _cached_admin_user_id: Optional[str] = None
 
 
@@ -100,12 +101,17 @@ def persist_conversation_turn(
     session_id: str,
     user_prompt: str,
     assistant_response: str,
-    model_name: str = "qwen3.5:4b"
-) -> None:
-    """Persists a completed user/assistant turn and updates usage stats in one SQLite transaction."""
+    model_name: str = "qwen3.5:4b",
+    turn_id: Optional[str] = None
+) -> bool:
+    """
+    Persists a completed user/assistant turn and updates usage stats in one atomic SQLite transaction.
+    Deduplicates via turn_id (if provided) so retries never insert the same exchange twice.
+    Returns True if inserted, False if deduplicated or skipped.
+    """
     try:
         _ensure_initialized()
-        with SessionLocal() as db:
+        with _write_lock, SessionLocal() as db:
             user_id = _cached_admin_user_id
             if not user_id:
                 user = db.query(User).filter_by(username="admin").first()
@@ -126,22 +132,36 @@ def persist_conversation_turn(
                 db.add(conv)
                 db.flush()
 
-            u_msg = Message(
-                conversation_id=conv.id,
-                role="user",
-                content=user_prompt,
-                status="completed"
-            )
+            user_msg_id = f"{turn_id}:u" if turn_id else None
+            assistant_msg_id = f"{turn_id}:a" if turn_id else None
+
+            if user_msg_id:
+                existing = db.query(Message).filter_by(id=user_msg_id).first()
+                if existing is not None:
+                    return False
+
+            u_kwargs: Dict[str, Any] = {
+                "conversation_id": conv.id,
+                "role": "user",
+                "content": user_prompt,
+                "status": "completed"
+            }
+            if user_msg_id:
+                u_kwargs["id"] = user_msg_id
+            u_msg = Message(**u_kwargs)
             db.add(u_msg)
             db.flush()
 
-            a_msg = Message(
-                conversation_id=conv.id,
-                parent_id=u_msg.id,
-                role="assistant",
-                content=assistant_response,
-                status="completed"
-            )
+            a_kwargs: Dict[str, Any] = {
+                "conversation_id": conv.id,
+                "parent_id": u_msg.id,
+                "role": "assistant",
+                "content": assistant_response,
+                "status": "completed"
+            }
+            if assistant_msg_id:
+                a_kwargs["id"] = assistant_msg_id
+            a_msg = Message(**a_kwargs)
             db.add(a_msg)
 
             today = date.today()
@@ -156,24 +176,28 @@ def persist_conversation_turn(
                 db.add(UsageStat(user_id=user_id, model=model_name, day=today, requests=1))
 
             db.commit()
+            return True
     except Exception as e:
         logger.debug(f"Non-fatal SQLite turn persistence warning: {e}")
+        return False
 
 
 def load_conversation_history(session_id: str, limit: int = 16) -> List[Dict[str, str]]:
-    """Loads recent messages for a session_id from SQLite on startup/cache miss."""
+    """
+    Loads the most recent messages for a session_id from SQLite in strict chronological order.
+    """
     try:
         _ensure_initialized()
         with SessionLocal() as db:
             msgs = (
                 db.query(Message)
                 .filter_by(conversation_id=session_id)
-                .order_by(Message.created_at.desc())
+                .order_by(Message.created_at.desc(), Message.rowid.desc() if hasattr(Message, "rowid") else Message.id.desc())
                 .limit(limit)
                 .all()
             )
             return [
-                {"role": m.role, "content": m.content}
+                {"id": m.id, "role": m.role, "content": m.content}
                 for m in reversed(msgs)
             ]
     except Exception:
@@ -186,7 +210,7 @@ def persist_memories_batch_orm(entries: Sequence[Dict[str, Any]]) -> None:
         return
     try:
         _ensure_initialized()
-        with SessionLocal() as db:
+        with _write_lock, SessionLocal() as db:
             user_id = _cached_admin_user_id
             if not user_id:
                 user = db.query(User).filter_by(username="admin").first()
@@ -228,7 +252,7 @@ def persist_audit_orm(action: str, details: Dict[str, Any]) -> None:
     """Writes an audit log entry to the SQLite audit_logs table."""
     try:
         _ensure_initialized()
-        with SessionLocal() as db:
+        with _write_lock, SessionLocal() as db:
             user_id = _cached_admin_user_id
             if not user_id:
                 user = db.query(User).filter_by(username="admin").first()

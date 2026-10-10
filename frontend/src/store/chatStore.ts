@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { AuraResponseSource } from '../utils/sseStream';
 
 export type AuraModelId =
   | 'auto'
@@ -13,6 +14,8 @@ export interface ChatMessage {
   text: string;
   timestamp: string;
   modelUsed?: string;
+  responseSource?: AuraResponseSource;
+  cacheStatus?: string;
   tps?: number;
 }
 
@@ -24,8 +27,26 @@ interface ChatStore {
   liveTps: number;
   peakTps: number;
   contextWindowLabel: string;
-  addMessage: (sender: 'user' | 'aura', text: string, modelUsed?: string, tps?: number) => void;
-  appendStreamChunk: (chunk: string, currentTps?: number, routedModel?: string) => void;
+  addMessage: (
+    sender: 'user' | 'aura',
+    text: string,
+    modelUsed?: string,
+    tps?: number,
+    responseSource?: AuraResponseSource,
+    cacheStatus?: string
+  ) => void;
+  appendStreamChunk: (
+    chunk: string,
+    currentTps?: number,
+    routedModel?: string,
+    responseSource?: AuraResponseSource,
+    cacheStatus?: string
+  ) => void;
+  finalizeLastMessageDiagnostics: (
+    routedModel?: string,
+    responseSource?: AuraResponseSource,
+    cacheStatus?: string
+  ) => void;
   setActiveRoutedModel: (model: string | null) => void;
   setStreaming: (streaming: boolean) => void;
   setSelectedModel: (model: AuraModelId) => void;
@@ -74,7 +95,20 @@ export const MODEL_CATALOG: Record<
   }
 };
 
-export function formatModelBadge(modelId?: string | null, fallbackSelect?: AuraModelId): string {
+export function formatModelBadge(
+  modelId?: string | null,
+  fallbackSelect?: AuraModelId,
+  responseSource?: AuraResponseSource
+): string {
+  if (responseSource === 'deterministic_fast_path') {
+    return 'Status Shortcut (No LLM)';
+  }
+  if (responseSource === 'response_cache') {
+    return 'Response Cache (No LLM)';
+  }
+  if (responseSource === 'offline_fallback') {
+    return 'Offline Simulation Fallback';
+  }
   if (modelId && modelId in MODEL_CATALOG) {
     return MODEL_CATALOG[modelId as AuraModelId].short;
   }
@@ -95,6 +129,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       text: 'Aura v3.5 Holographic Core online. Hybrid RRF Context Engine & FlashAttention Turbo active.',
       timestamp: new Date().toLocaleTimeString(),
       modelUsed: 'Aura Smart Router',
+      responseSource: 'deterministic_fast_path',
       tps: 362.5
     }
   ],
@@ -104,7 +139,7 @@ export const useChatStore = create<ChatStore>((set) => ({
   liveTps: 362.5,
   peakTps: 385.2,
   contextWindowLabel: '1M / 10M Episodic',
-  addMessage: (sender, text, modelUsed, tps) =>
+  addMessage: (sender, text, modelUsed, tps, responseSource, cacheStatus) =>
     set((state) => ({
       messages: [
         ...state.messages,
@@ -114,26 +149,36 @@ export const useChatStore = create<ChatStore>((set) => ({
           text,
           timestamp: new Date().toLocaleTimeString(),
           modelUsed,
+          responseSource,
+          cacheStatus,
           tps
         }
       ]
     })),
   setActiveRoutedModel: (activeRoutedModel) => set({ activeRoutedModel }),
-  appendStreamChunk: (chunk, currentTps, routedModel) =>
+  appendStreamChunk: (chunk, currentTps, routedModel, responseSource, cacheStatus) =>
     set((state) => {
       const updatedTps = currentTps && currentTps > 0 ? currentTps : state.liveTps;
       const newPeak = Math.max(state.peakTps, updatedTps);
       const effectiveRouted = routedModel || state.activeRoutedModel;
-      const resolvedModelLabel = formatModelBadge(effectiveRouted, state.selectedModel);
 
       const lastIdx = state.messages.length - 1;
       const last = lastIdx >= 0 ? state.messages[lastIdx] : undefined;
+      const effectiveSource = responseSource || last?.responseSource || 'live_model';
+      const effectiveCache = cacheStatus || last?.cacheStatus;
+      const resolvedModelLabel = formatModelBadge(
+        effectiveRouted,
+        state.selectedModel,
+        effectiveSource
+      );
 
       if (last && last.sender === 'aura') {
         const updatedMessage: ChatMessage = {
           ...last,
           text: last.text + chunk,
           modelUsed: resolvedModelLabel,
+          responseSource: effectiveSource,
+          cacheStatus: effectiveCache,
           tps: updatedTps
         };
         const nextMessages = state.messages.slice(0, lastIdx);
@@ -152,6 +197,8 @@ export const useChatStore = create<ChatStore>((set) => ({
         text: chunk,
         timestamp: new Date().toLocaleTimeString(),
         modelUsed: resolvedModelLabel,
+        responseSource: effectiveSource,
+        cacheStatus: effectiveCache,
         tps: updatedTps
       };
 
@@ -161,6 +208,29 @@ export const useChatStore = create<ChatStore>((set) => ({
         activeRoutedModel: effectiveRouted || state.activeRoutedModel,
         messages: [...state.messages, newMessage]
       };
+    }),
+  finalizeLastMessageDiagnostics: (routedModel, responseSource, cacheStatus) =>
+    set((state) => {
+      const lastIdx = state.messages.length - 1;
+      const last = lastIdx >= 0 ? state.messages[lastIdx] : undefined;
+      if (!last || last.sender !== 'aura') return state;
+      const effectiveRouted = routedModel || state.activeRoutedModel;
+      const effectiveSource = responseSource || last.responseSource || 'live_model';
+      const effectiveCache = cacheStatus || last.cacheStatus;
+      const resolvedModelLabel = formatModelBadge(
+        effectiveRouted,
+        state.selectedModel,
+        effectiveSource
+      );
+      const updatedMessage: ChatMessage = {
+        ...last,
+        modelUsed: resolvedModelLabel,
+        responseSource: effectiveSource,
+        cacheStatus: effectiveCache
+      };
+      const nextMessages = state.messages.slice(0, lastIdx);
+      nextMessages.push(updatedMessage);
+      return { messages: nextMessages };
     }),
   setStreaming: (isStreaming) => set({ isStreaming }),
   setSelectedModel: (selectedModel) =>

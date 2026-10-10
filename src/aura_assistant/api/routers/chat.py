@@ -22,6 +22,7 @@ class ChatStreamRequest(BaseModel):
     override_model: Optional[str] = Field(None, description="Explicit model override")
     location: Optional[Dict[str, Any]] = Field(None, description="Client real-time location payload")
     session_id: str = Field("default_session", description="Conversation session ID for multi-turn isolation")
+    request_id: Optional[str] = Field(None, description="Optional stable client request/turn ID for deduplication")
 
 class ProfileUpdateRequest(BaseModel):
     name: Optional[str] = None
@@ -48,11 +49,22 @@ async def stream_chat_endpoint(
             biometric_score=req.biometric_score,
             override_model=req.override_model,
             location=req.location,
-            session_id=req.session_id
+            session_id=req.session_id,
+            request_id=req.request_id
         ):
             yield f"data: {json.dumps(event)}\n\n"
 
     return StreamingResponse(sse_event_generator(), media_type="text/event-stream")
+
+@router.get("/diagnostics")
+async def get_chat_diagnostics_endpoint(user: str = Depends(verify_auth_token)):
+    container = get_container()
+    return {
+        "ok": True,
+        "last_pre_inference_trace": container.chat_service.last_pre_inference_trace,
+        "last_usage_metrics": container.llm_provider.last_usage_metrics,
+        "last_response_source": container.llm_provider.last_response_source
+    }
 
 @router.get("/profile")
 async def get_profile_endpoint(user: str = Depends(verify_auth_token)):

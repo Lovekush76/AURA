@@ -338,19 +338,19 @@ class EpisodicMemoryManager:
                 logger.info(f"Upserted bounded episodic memory fact: '{candidate}'")
 
         patterns = {
-            "headline": r"(?:headline|title|role)[:\s]+([^\n\.,\?]+)",
-            "about": r"(?:about|summary|bio)[:\s]+([^\n\.\?]+)",
-            "skills": r"(?:skills?|tech stack|technologies)[:\s]+([^\n\.\?]+)",
-            "experience": r"(?:experience|work|company)[:\s]+([^\n\.\?]+)",
-            "education": r"(?:education|college|degree|university)[:\s]+([^\n\.\?]+)",
-            "location": r"(?:location|based in|living in)[:\s]+([^\n\.\?]+)"
+            "headline": r"\bmy\s+(?:headline|title|role)\s+(?:is\s*)?[:\s]+([^\n\.,\?]+)",
+            "about": r"\bmy\s+(?:bio|summary)\s+(?:is\s*)?[:\s]+([^\n\.\?]+)",
+            "skills": r"\bmy\s+(?:skills?|tech stack|technologies)\s+(?:are|is)?[:\s]+([^\n\.\?]+)",
+            "experience": r"\b(?:my\s+experience\s+is|i\s+work\s+at)\s*[:\s]*([^\n\.\?]+)",
+            "education": r"\b(?:my\s+education\s+is|i\s+studied\s+at)\s*[:\s]*([^\n\.\?]+)",
+            "location": r"\b(?:my\s+location\s+is|i\s+am\s+based\s+in|i\s+live\s+in)\s*[:\s]*([^\n\.\?]+)"
         }
         profile_updates: Dict[str, Any] = {}
         for key, pat in patterns.items():
             match = re.search(pat, user_text, re.IGNORECASE)
             if match:
                 val = _sanitize_fact_text(match.group(1).strip(), max_chars=160)
-                if len(val) > 2 and "?" not in val:
+                if len(val) > 2 and "?" not in val and _is_valid_fact_candidate(val):
                     profile_updates[key] = val
 
         profile_changed = False

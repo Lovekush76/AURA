@@ -4,8 +4,15 @@
  * explicit 'routing' / 'token' / 'done' / 'error' events, and <=1 store update per animation frame.
  */
 
+export type AuraResponseSource =
+  | 'live_model'
+  | 'response_cache'
+  | 'deterministic_fast_path'
+  | 'offline_fallback';
+
 export interface AuraSseRoutingEvent {
   type: 'routing';
+  request_id?: string;
   model: string;
   pinned?: boolean;
   num_ctx?: number;
@@ -14,10 +21,28 @@ export interface AuraSseRoutingEvent {
   channel?: string;
 }
 
+export interface AuraSseDoneEvent {
+  type: 'done';
+  request_id?: string;
+  complete_text?: string;
+  model?: string;
+  response_source?: AuraResponseSource;
+  cache_status?: 'cache_hit' | 'cache_miss' | 'cache_bypass';
+  cache_reason?: string;
+  previous_exchange_present?: boolean;
+  pre_llm_overhead_ms?: number;
+}
+
 export interface AuraSseCallbacks {
   onRouting?: (event: AuraSseRoutingEvent) => void;
-  onTokenBatch: (batchText: string, measuredTps: number, routedModel?: string) => void;
-  onDone?: (completeText: string, routedModel?: string) => void;
+  onTokenBatch: (
+    batchText: string,
+    measuredTps: number,
+    routedModel?: string,
+    responseSource?: AuraResponseSource,
+    cacheStatus?: string
+  ) => void;
+  onDone?: (completeText: string, routedModel?: string, doneEvent?: AuraSseDoneEvent) => void;
   onError?: (errorMessage: string) => void;
 }
 
@@ -72,6 +97,8 @@ export async function consumeAuraSseStream(
   let tokenCount = 0;
   let lastTps = 0;
   let routedModel: string | undefined;
+  let responseSource: AuraResponseSource | undefined;
+  let cacheStatus: string | undefined;
   let rafId: number | null = null;
   const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
 
@@ -83,7 +110,7 @@ export async function consumeAuraSseStream(
     if (pendingBatch.length > 0) {
       const toCommit = pendingBatch;
       pendingBatch = '';
-      callbacks.onTokenBatch(toCommit, lastTps, routedModel);
+      callbacks.onTokenBatch(toCommit, lastTps, routedModel, responseSource, cacheStatus);
     }
   };
 
@@ -104,6 +131,24 @@ export async function consumeAuraSseStream(
       if (data.type === 'routing' && typeof data.model === 'string') {
         routedModel = data.model;
         callbacks.onRouting?.(data as AuraSseRoutingEvent);
+      } else if (
+        data.type === 'cache_hit' ||
+        data.type === 'cache_miss' ||
+        data.type === 'cache_bypass'
+      ) {
+        cacheStatus = typeof data.status === 'string' ? data.status : data.type;
+        if (data.type === 'cache_hit') {
+          responseSource = 'response_cache';
+        } else if (data.reason === 'dedicated_status_fast_path') {
+          responseSource = 'deterministic_fast_path';
+        }
+      } else if (data.type === 'pre_inference_trace' && data.trace) {
+        if (typeof data.trace.response_source === 'string') {
+          responseSource = data.trace.response_source as AuraResponseSource;
+        }
+        if (typeof data.trace.cache_status === 'string') {
+          cacheStatus = data.trace.cache_status;
+        }
       } else if (data.type === 'token' && typeof data.content === 'string') {
         fullResponse += data.content;
         pendingBatch += data.content;
@@ -117,8 +162,14 @@ export async function consumeAuraSseStream(
         const errMsg = typeof data.error === 'string' ? data.error : 'Stream error';
         callbacks.onError?.(errMsg);
       } else if (data.type === 'done') {
+        if (typeof data.response_source === 'string') {
+          responseSource = data.response_source as AuraResponseSource;
+        }
+        if (typeof data.cache_status === 'string') {
+          cacheStatus = data.cache_status;
+        }
         flushPendingTokens();
-        callbacks.onDone?.(fullResponse, routedModel);
+        callbacks.onDone?.(fullResponse, routedModel, data as AuraSseDoneEvent);
       }
     }
   };

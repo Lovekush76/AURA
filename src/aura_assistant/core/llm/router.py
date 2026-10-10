@@ -47,6 +47,7 @@ class LLMRouter:
         self.slots: Dict[str, Dict[str, Any]] = {
             "voice": {"model": "qwen3.5:4b", "ctx": 1536, "temp": 0.4, "pinned": True, "keep_alive": -1},
             "chat": {"model": "qwen2.5:0.5b", "ctx": 2048, "temp": 0.5, "pinned": True, "keep_alive": -1},
+            "chat_multi_turn": {"model": "qwen3.5:4b", "ctx": 4096, "temp": 0.3, "pinned": True, "keep_alive": -1},
             "code": {"model": "qwen3-coder:30b", "ctx": 32768, "temp": 0.2, "pinned": False, "keep_alive": "10m"},
             "reasoning": {"model": "deepseek-r1:14b", "ctx": 32768, "temp": 0.5, "pinned": False, "keep_alive": "10m"},
             "ultra": {"model": "nvidia/nemotron-3-ultra", "ctx": 1000000, "temp": 0.3, "pinned": False, "keep_alive": "10m"}
@@ -55,8 +56,8 @@ class LLMRouter:
         # Authoritative context limits for known models when selected via override_model
         self.model_ctx_profiles: Dict[str, Dict[str, Any]] = {
             "qwen2.5:0.5b": {"ctx": 2048, "temp": 0.5, "pinned": True, "keep_alive": -1, "reasoning": False},
-            "qwen2.5:1.5b": {"ctx": 4096, "temp": 0.5, "pinned": False, "keep_alive": "10m", "reasoning": False},
-            "qwen3.5:4b": {"ctx": 4096, "temp": 0.4, "pinned": True, "keep_alive": -1, "reasoning": False},
+            "qwen2.5:1.5b": {"ctx": 4096, "temp": 0.3, "pinned": True, "keep_alive": -1, "reasoning": False},
+            "qwen3.5:4b": {"ctx": 4096, "temp": 0.3, "pinned": True, "keep_alive": -1, "reasoning": False},
             "qwen3-coder:30b": {"ctx": 32768, "temp": 0.2, "pinned": False, "keep_alive": "10m", "reasoning": False},
             "deepseek-r1:14b": {"ctx": 32768, "temp": 0.5, "pinned": False, "keep_alive": "10m", "reasoning": True},
         }
@@ -305,7 +306,8 @@ class LLMRouter:
         self,
         prompt: str,
         channel: str = "text",
-        override_model: Optional[str] = None
+        override_model: Optional[str] = None,
+        has_history: bool = False
     ) -> RouteResult:
         t0 = time.perf_counter()
         available = await self.get_available_models()
@@ -375,13 +377,14 @@ class LLMRouter:
             )
 
         # 4. Algorithmic reasoning and problem solving detection
+        lower_p = prompt.lower()
         reasoning_markers = [
             "prove", "analyze complexity", "architect", "deep analysis",
             "step by step", "algorithm", "derive", "calculate", "solve",
             "why does", "explain why", "deduce", "logic", "troubleshoot",
             "root cause", "system design"
         ]
-        if any(w in prompt.lower() for w in reasoning_markers):
+        if any(w in lower_p for w in reasoning_markers):
             cfg = self.slots["reasoning"]
             return await self._admit_and_resolve_route(
                 target_model=cfg["model"],
@@ -394,7 +397,35 @@ class LLMRouter:
                 channel=channel
             )
 
-        # 5. Standard conversation fallback
+        # 5. Multi-turn, analytical, or instruction-sensitive conversational routing (P2-8)
+        instruction_sensitive_markers = [
+            "reply with", "exact", "previous", "earlier", "what did you",
+            "what did i", "explain", "compare", "summarize", "diagnos",
+            "telemetry", "cache", "history", "context", "table", "verify",
+            "audit", "recall", "remember"
+        ]
+        needs_strong_chat = (
+            has_history
+            or len(prompt.strip()) > 80
+            or any(m in lower_p for m in instruction_sensitive_markers)
+        )
+        if needs_strong_chat:
+            strong_cfg = dict(self.slots["chat_multi_turn"])
+            if available and strong_cfg["model"] not in available and "qwen2.5:1.5b" in available:
+                strong_cfg["model"] = "qwen2.5:1.5b"
+            if self.vram_arbiter is None or self.vram_arbiter.can_load_model(strong_cfg["model"], num_ctx=strong_cfg["ctx"]):
+                return await self._admit_and_resolve_route(
+                    target_model=strong_cfg["model"],
+                    num_ctx=strong_cfg["ctx"],
+                    temperature=strong_cfg["temp"],
+                    pinned=True,
+                    keep_alive=-1,
+                    reasoning_mode=False,
+                    available=available,
+                    channel=channel
+                )
+
+        # 6. Low-stakes, short single-turn conversation or constrained fallback
         cfg = self.slots["chat"]
         return await self._admit_and_resolve_route(
             target_model=cfg["model"],
