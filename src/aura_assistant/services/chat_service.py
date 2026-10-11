@@ -270,6 +270,7 @@ class ResponseCache:
     ) -> str:
         payload = {
             "v": context_version,
+            "session_id": session_id,
             "prompt": (prompt or "").strip().lower(),
             "model": model,
             "num_ctx": int(num_ctx),
@@ -413,6 +414,22 @@ class ChatService:
         self._bg_tasks: Set[asyncio.Task] = set()
         self._session_locks: Dict[str, asyncio.Lock] = {}
         self.last_pre_inference_trace: Dict[str, Any] = {}
+        # Bounded request-specific diagnostics registry (Fix 5)
+        self.pre_inference_traces: Dict[str, Dict[str, Any]] = {}
+        self._max_traces: int = 100
+
+    def record_pre_inference_trace(self, request_id: str, trace: Dict[str, Any]) -> None:
+        """Stores a structured diagnostic trace in a bounded registry with FIFO eviction."""
+        if len(self.pre_inference_traces) >= self._max_traces:
+            # Evict oldest entry
+            oldest_k = next(iter(self.pre_inference_traces))
+            del self.pre_inference_traces[oldest_k]
+        self.pre_inference_traces[request_id] = trace
+        self.last_pre_inference_trace = trace
+
+    def get_pre_inference_trace(self, request_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieves a specific request's diagnostic trace."""
+        return self.pre_inference_traces.get(request_id)
 
     def _get_session_lock(self, session_id: str) -> asyncio.Lock:
         lock = self._session_locks.get(session_id)
@@ -601,7 +618,8 @@ class ChatService:
                 url_context=url_context,
                 reasoning_mode=route.reasoning_mode,
                 max_ctx_override=route.num_ctx,
-                sync_from_db=False
+                sync_from_db=False,
+                channel=channel
             )
             ctx_ms = (time.perf_counter() - t_ctx0) * 1000.0
             pre_llm_overhead_ms = (time.perf_counter() - t_req_start) * 1000.0
@@ -681,7 +699,7 @@ class ChatService:
                     for m in messages
                 ]
 
-            self.last_pre_inference_trace = pre_inference_diagnostics
+            self.record_pre_inference_trace(req_id, pre_inference_diagnostics)
             logger.info(f"chat.pre_inference_trace {json.dumps(pre_inference_diagnostics)}")
 
             full_response_acc: List[str] = []
@@ -725,14 +743,15 @@ class ChatService:
                     tool_invoked=tool_invoked
                 )
 
-            # 8. Durable Turn Persistence (P1-6: read-after-write consistency across requests & workers)
+            # 8. Durable Turn Persistence (Fix 1: keyword arguments restore req_id turn_id deduplication)
             compacted_chunk = await asyncio.to_thread(
                 self.context_engine.record_turn,
-                session_id,
-                prompt,
-                complete_text,
-                route.model,
-                req_id
+                session_id=session_id,
+                user_prompt=prompt,
+                assistant_response=complete_text,
+                model_name=route.model,
+                persist_db=True,
+                turn_id=req_id,
             )
             if compacted_chunk:
                 arch_orm = self.memory.archive_compacted_summary(session_id, compacted_chunk, persist_sync=False)

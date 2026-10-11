@@ -8,8 +8,10 @@ import asyncio
 import time
 import httpx
 import logging
+from pathlib import Path
 from typing import Dict, Any, Optional, Union, FrozenSet, List
 from pydantic import BaseModel
+import yaml
 
 logger = logging.getLogger("aura-llm-router")
 
@@ -31,7 +33,8 @@ class LLMRouter:
         vram_arbiter: Any = None,
         http_client: Optional[httpx.AsyncClient] = None,
         cache_ttl_seconds: float = 30.0,
-        offline_backoff_seconds: float = 5.0
+        offline_backoff_seconds: float = 5.0,
+        config_path: Optional[str] = None
     ):
         self.ollama_host = ollama_host.rstrip("/")
         self.vram_arbiter = vram_arbiter
@@ -53,6 +56,9 @@ class LLMRouter:
             "ultra": {"model": "nvidia/nemotron-3-ultra", "ctx": 1000000, "temp": 0.3, "pinned": False, "keep_alive": "10m"}
         }
 
+        # Dynamically load overrides from models.yaml if available
+        self._load_config(config_path)
+
         # Authoritative context limits for known models when selected via override_model
         self.model_ctx_profiles: Dict[str, Dict[str, Any]] = {
             "qwen2.5:0.5b": {"ctx": 2048, "temp": 0.5, "pinned": True, "keep_alive": -1, "reasoning": False},
@@ -67,6 +73,26 @@ class LLMRouter:
         self._tags_valid_until: float = 0.0
         self._offline_backoff_until: float = 0.0
         self.daemon_reachable: bool = False
+
+    def _load_config(self, config_path: Optional[str] = None) -> None:
+        """Parses configs/models.yaml to populate slot models and residency attributes."""
+        path_to_try = Path(config_path) if config_path else Path(__file__).resolve().parents[3] / "configs" / "models.yaml"
+        if not path_to_try.exists():
+            return
+        try:
+            with open(path_to_try, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+            routing_cfg = data.get("routing", {})
+            for slot_key, slot_info in routing_cfg.items():
+                if isinstance(slot_info, dict) and "primary" in slot_info:
+                    primary_model = slot_info["primary"]
+                    if slot_key in self.slots:
+                        self.slots[slot_key]["model"] = primary_model
+                    elif slot_key == "chat":
+                        self.slots["chat"]["model"] = primary_model
+            logger.debug(f"Loaded dynamic models config from {path_to_try}")
+        except Exception as e:
+            logger.warning(f"Could not load models config from {path_to_try}: {e}")
 
     def _get_client(self) -> httpx.AsyncClient:
         try:
@@ -397,7 +423,7 @@ class LLMRouter:
                 channel=channel
             )
 
-        # 5. Multi-turn, analytical, or instruction-sensitive conversational routing (P2-8)
+        # 5. Multi-turn, analytical, or instruction-sensitive conversational routing (P2-8 & Fix 2)
         instruction_sensitive_markers = [
             "reply with", "exact", "previous", "earlier", "what did you",
             "what did i", "explain", "compare", "summarize", "diagnos",
@@ -410,20 +436,48 @@ class LLMRouter:
             or any(m in lower_p for m in instruction_sensitive_markers)
         )
         if needs_strong_chat:
-            strong_cfg = dict(self.slots["chat_multi_turn"])
-            if available and strong_cfg["model"] not in available and "qwen2.5:1.5b" in available:
-                strong_cfg["model"] = "qwen2.5:1.5b"
-            if self.vram_arbiter is None or self.vram_arbiter.can_load_model(strong_cfg["model"], num_ctx=strong_cfg["ctx"]):
+            # Candidates in order of strength for multi-turn precision
+            candidates = [
+                self.slots.get("chat_multi_turn", {}).get("model", "qwen3.5:4b"),
+                "qwen2.5:1.5b"
+            ]
+            selected_strong: Optional[str] = None
+            for cand in candidates:
+                if not available or cand in available:
+                    if self.vram_arbiter is None or self.vram_arbiter.can_load_model(cand, num_ctx=4096):
+                        selected_strong = cand
+                        break
+
+            if selected_strong:
                 return await self._admit_and_resolve_route(
-                    target_model=strong_cfg["model"],
-                    num_ctx=strong_cfg["ctx"],
-                    temperature=strong_cfg["temp"],
+                    target_model=selected_strong,
+                    num_ctx=4096,
+                    temperature=0.3,
                     pinned=True,
                     keep_alive=-1,
                     reasoning_mode=False,
                     available=available,
                     channel=channel
                 )
+            else:
+                # Strong conversational models unavailable or rejected by VRAM arbiter
+                cfg = self.slots["chat"]
+                warning_reason = f"strong_chat_model_unavailable:fallback_to_{cfg['model']}"
+                logger.warning(
+                    f"Multi-turn context requires stronger chat model, but candidates {candidates} are unavailable; falling back to '{cfg['model']}' ({warning_reason})."
+                )
+                route_res = await self._admit_and_resolve_route(
+                    target_model=cfg["model"],
+                    num_ctx=cfg["ctx"],
+                    temperature=cfg["temp"],
+                    pinned=True,
+                    keep_alive=-1,
+                    reasoning_mode=False,
+                    available=available,
+                    channel=channel
+                )
+                route_res.fallback_reason = warning_reason
+                return route_res
 
         # 6. Low-stakes, short single-turn conversation or constrained fallback
         cfg = self.slots["chat"]

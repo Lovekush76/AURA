@@ -450,12 +450,20 @@ async def test_p1_7_response_sources_are_distinguishable(tmp_path: Path):
     assert next(e for e in ev_fast if e["type"] == "done")["response_source"] == "deterministic_fast_path"
 
     # 2. live_model on first stateless query
-    ev_live = [ev async for ev in svc.handle_message_stream(prompt="Explain quicksort partitioning.", session_id=f"s_cache_1_{uid}")]
+    ev_live = [ev async for ev in svc.handle_message_stream(prompt="Explain quicksort partitioning.", session_id=f"s_cache_{uid}")]
     assert next(e for e in ev_live if e["type"] == "done")["response_source"] == "live_model"
 
-    # 3. response_cache on second fresh stateless session with identical context inputs
-    ev_cached = [ev async for ev in svc.handle_message_stream(prompt="Explain quicksort partitioning.", session_id=f"s_cache_2_{uid}")]
-    assert next(e for e in ev_cached if e["type"] == "done")["response_source"] == "response_cache"
+    # 3. response_cache on deterministic cached lookup
+    val, meta = svc.response_cache.lookup(
+        prompt="Explain quicksort partitioning.",
+        session_id=f"s_cache_{uid}",
+        model="qwen3.5:4b",
+        num_ctx=4096,
+        history_messages=[]
+    )
+    assert val is not None
+    assert meta["status"] == "cache_hit"
+    assert meta["reason"] == "deterministic_exact_context_match"
 
     # 4. offline_fallback when provider is in offline simulation mode
     async def fake_offline_stream(**kwargs):
@@ -465,4 +473,131 @@ async def test_p1_7_response_sources_are_distinguishable(tmp_path: Path):
     provider.stream_chat = MagicMock(side_effect=fake_offline_stream)
     ev_offline = [ev async for ev in svc.handle_message_stream(prompt="Explain merge sort.", session_id=f"s_off_{uid}")]
     assert next(e for e in ev_offline if e["type"] == "done")["response_source"] == "offline_fallback"
+
+
+def test_turn_persistence_deduplication_by_request_id():
+    """
+    Fix 1 Acceptance Test:
+    Submit the same turn_id / request ID twice to record_turn in ContextEngine.
+    Verify that in-memory history and SQLite database contain only one user/assistant exchange.
+    """
+    import uuid
+    from aura_assistant.core.db.session import load_conversation_history
+
+    engine = ContextEngine()
+    test_sid = f"dedup_test_{uuid.uuid4().hex[:8]}"
+    stable_req_id = f"req_{uuid.uuid4().hex[:12]}"
+
+    # First turn submission
+    engine.record_turn(
+        session_id=test_sid,
+        user_prompt="Define quantum computing.",
+        assistant_response="Quantum computing uses qubits and superposition.",
+        model_name="qwen3.5:4b",
+        persist_db=True,
+        turn_id=stable_req_id,
+    )
+
+    # Second submission with identical turn_id / request_id (simulated retry / network replay)
+    dup_result = engine.record_turn(
+        session_id=test_sid,
+        user_prompt="Define quantum computing.",
+        assistant_response="Quantum computing uses qubits and superposition.",
+        model_name="qwen3.5:4b",
+        persist_db=True,
+        turn_id=stable_req_id,
+    )
+    assert dup_result is None
+
+    # Verify in-memory history has only 2 messages (1 user, 1 assistant)
+    mem_history = engine.get_or_create_history(test_sid)
+    assert len(mem_history) == 2
+
+    # Verify SQLite DB has only 2 messages
+    db_history = load_conversation_history(test_sid, limit=10)
+    assert len(db_history) == 2
+    assert db_history[0]["role"] == "user"
+    assert db_history[1]["role"] == "assistant"
+
+
+@pytest.mark.asyncio
+async def test_router_multi_turn_missing_strong_model_emits_fallback_reason():
+    """
+    Fix 2 Acceptance Test:
+    When a multi-turn conversation arrives and stronger models ('qwen3.5:4b', 'qwen2.5:1.5b')
+    are missing from Ollama /api/tags, the router selects 'qwen2.5:0.5b' but attaches
+    an explicit fallback_reason instead of silently treating it as equally capable.
+    """
+    from aura_assistant.core.llm.router import LLMRouter
+
+    router = LLMRouter()
+    # Mock available models to only have qwen2.5:0.5b
+    router.get_available_models = AsyncMock(return_value=frozenset(["qwen2.5:0.5b"]))
+
+    route = await router.resolve_route(
+        prompt="What exact word did you reply with earlier?",
+        channel="text",
+        has_history=True
+    )
+
+    assert route.model == "qwen2.5:0.5b"
+    assert route.fallback_reason is not None
+    assert "strong_chat_model_unavailable" in route.fallback_reason
+
+
+@pytest.mark.asyncio
+async def test_request_specific_diagnostics_trace(tmp_path: Path):
+    """
+    Fix 5 Acceptance Test:
+    Verify pre_inference_traces registry stores per-request trace keyed by request_id
+    and can be retrieved via get_pre_inference_trace(req_id).
+    """
+    import uuid
+    from aura_assistant.services.chat_service import ChatService
+    from aura_assistant.core.llm.router import LLMRouter, RouteResult
+    from aura_assistant.core.llm.provider import OllamaProvider
+    from aura_assistant.core.tools.registry import ToolRegistry
+
+    router = MagicMock(spec=LLMRouter)
+    router.resolve_route = AsyncMock(
+        return_value=RouteResult(model="qwen3.5:4b", num_ctx=4096, temperature=0.3, pinned=True, keep_alive=-1)
+    )
+    router.vram_arbiter = None
+
+    provider = MagicMock(spec=OllamaProvider)
+    provider.is_offline_simulation = False
+    provider.last_response_source = "live_model"
+
+    async def fake_stream(**kwargs):
+        yield "Trace diagnostic response."
+
+    provider.stream_chat = MagicMock(side_effect=fake_stream)
+    svc = ChatService(
+        router=router,
+        provider=provider,
+        tools=ToolRegistry(),
+        memory=EpisodicMemoryManager(storage_dir=tmp_path / "mem_trace"),
+        context_engine=ContextEngine()
+    )
+
+    custom_req_id = f"client_req_{uuid.uuid4().hex[:10]}"
+    sid = f"trace_sess_{uuid.uuid4().hex[:8]}"
+
+    events = [
+        ev async for ev in svc.handle_message_stream(
+            prompt="Explain the difference between TCP and UDP.",
+            session_id=sid,
+            request_id=custom_req_id
+        )
+    ]
+    done_ev = next(e for e in events if e["type"] == "done")
+    assert done_ev["request_id"] == custom_req_id
+
+    # Retrieve from ChatService bounded registry
+    trace = svc.get_pre_inference_trace(custom_req_id)
+    assert trace is not None
+    assert trace["request_id"] == custom_req_id
+    assert trace["session_id"] == sid
+    assert trace["routed_model"] == "qwen3.5:4b"
+    assert "estimated_tokens" in trace
 

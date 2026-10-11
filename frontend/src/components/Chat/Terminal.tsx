@@ -12,7 +12,8 @@ import {
   Zap,
   Database,
   Cpu,
-  ArrowDown
+  ArrowDown,
+  PlusCircle
 } from 'lucide-react';
 import {
   useChatStore,
@@ -141,6 +142,7 @@ export const Terminal = () => {
   const appendStreamChunk = useChatStore((s) => s.appendStreamChunk);
   const finalizeLastMessageDiagnostics = useChatStore((s) => s.finalizeLastMessageDiagnostics);
   const setStreaming = useChatStore((s) => s.setStreaming);
+  const clearChat = useChatStore((s) => s.clearChat);
 
   const location = useLocationStore((s) => s.location);
 
@@ -251,6 +253,11 @@ export const Terminal = () => {
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
+    const requestId =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `req_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+
     try {
       const response = await fetch('/api/v1/chat/stream', {
         method: 'POST',
@@ -260,6 +267,7 @@ export const Terminal = () => {
           channel: 'text',
           location: location,
           session_id: getAuraSessionId(),
+          request_id: requestId,
           override_model: selectedModel === 'auto' ? undefined : selectedModel
         }),
         signal: controller.signal
@@ -355,6 +363,16 @@ export const Terminal = () => {
               {liveTps.toFixed(1)} tok/s (Peak {peakTps.toFixed(1)})
             </span>
           </span>
+          <button
+            type="button"
+            onClick={clearChat}
+            disabled={isStreaming}
+            title="Start a new conversation session"
+            className="flex items-center gap-1 text-white/70 hover:text-white bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 px-2 py-0.5 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <PlusCircle size={12} className="text-cyan-400" />
+            <span>New Chat</span>
+          </button>
         </div>
       </div>
 

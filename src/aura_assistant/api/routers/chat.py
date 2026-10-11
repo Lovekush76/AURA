@@ -62,8 +62,22 @@ async def get_chat_diagnostics_endpoint(user: str = Depends(verify_auth_token)):
     return {
         "ok": True,
         "last_pre_inference_trace": container.chat_service.last_pre_inference_trace,
+        "pre_inference_traces": container.chat_service.pre_inference_traces,
         "last_usage_metrics": container.llm_provider.last_usage_metrics,
         "last_response_source": container.llm_provider.last_response_source
+    }
+
+@router.get("/diagnostics/{request_id}")
+async def get_chat_request_diagnostics_endpoint(request_id: str, user: str = Depends(verify_auth_token)):
+    container = get_container()
+    trace = container.chat_service.get_pre_inference_trace(request_id)
+    if trace is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=f"Diagnostic trace for request_id '{request_id}' not found")
+    return {
+        "ok": True,
+        "request_id": request_id,
+        "trace": trace
     }
 
 @router.get("/profile")

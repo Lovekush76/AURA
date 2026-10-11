@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { AuraResponseSource } from '../utils/sseStream';
+import { createNewAuraSessionId } from '../config/api';
 
 export type AuraModelId =
   | 'auto'
@@ -243,5 +244,8 @@ export const useChatStore = create<ChatStore>((set) => ({
       liveTps,
       peakTps: Math.max(s.peakTps, liveTps)
     })),
-  clearChat: () => set({ messages: [], activeRoutedModel: null })
+  clearChat: () => {
+    createNewAuraSessionId();
+    set({ messages: [], activeRoutedModel: null });
+  }
 }));

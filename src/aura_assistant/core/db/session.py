@@ -185,14 +185,16 @@ def persist_conversation_turn(
 def load_conversation_history(session_id: str, limit: int = 16) -> List[Dict[str, str]]:
     """
     Loads the most recent messages for a session_id from SQLite in strict chronological order.
+    Uses SQLite's deterministic rowid insertion order for ties when timestamps match.
     """
     try:
         _ensure_initialized()
+        from sqlalchemy import text
         with SessionLocal() as db:
             msgs = (
                 db.query(Message)
                 .filter_by(conversation_id=session_id)
-                .order_by(Message.created_at.desc(), Message.rowid.desc() if hasattr(Message, "rowid") else Message.id.desc())
+                .order_by(Message.created_at.desc(), text("rowid DESC"))
                 .limit(limit)
                 .all()
             )

@@ -19,11 +19,22 @@ export const getAuraSessionId = (): string => {
   try {
     let sid = window.localStorage.getItem('aura_session_id');
     if (!sid) {
-      sid = `session_${Math.random().toString(36).substring(2, 10)}`;
-      window.localStorage.setItem('aura_session_id', sid);
+      sid = createNewAuraSessionId();
     }
     return sid;
   } catch {
     return 'default_session';
   }
+};
+
+export const createNewAuraSessionId = (): string => {
+  const sid = typeof crypto !== 'undefined' && crypto.randomUUID
+    ? `session_${crypto.randomUUID()}`
+    : `session_${Math.random().toString(36).substring(2, 12)}`;
+  if (typeof window !== 'undefined') {
+    try {
+      window.localStorage.setItem('aura_session_id', sid);
+    } catch {}
+  }
+  return sid;
 };
