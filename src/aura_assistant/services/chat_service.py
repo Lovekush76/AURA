@@ -718,7 +718,10 @@ class ChatService:
                     messages=messages,
                     temperature=route.temperature,
                     num_ctx=route.num_ctx,
-                    keep_alive=route.keep_alive
+                    keep_alive=route.keep_alive,
+                    num_predict=getattr(route, "num_predict", None),
+                    num_thread=getattr(route, "num_thread", 4),
+                    num_batch=getattr(route, "num_batch", 512)
                 ):
                     full_response_acc.append(token)
                     yield {"type": "token", "content": token}
@@ -783,7 +786,8 @@ class ChatService:
                 "trace": pre_inference_diagnostics
             }
 
-            # 10. Emit 'done' with explicit response_source and cache telemetry (P1-7)
+            # 10. Emit 'done' with explicit response_source, usage metrics, and cache telemetry (P1-7)
+            usage = getattr(self.provider, "last_usage_metrics", {})
             yield {
                 "type": "done",
                 "request_id": req_id,
@@ -793,5 +797,11 @@ class ChatService:
                 "cache_status": cache_event["status"],
                 "cache_reason": cache_event["reason"],
                 "previous_exchange_present": pre_inference_diagnostics["previous_exchange_present"],
-                "pre_llm_overhead_ms": round(pre_llm_overhead_ms, 2)
+                "pre_llm_overhead_ms": round(pre_llm_overhead_ms, 2),
+                "ttft_ms": usage.get("ttft_ms"),
+                "prompt_eval_count": usage.get("prompt_eval_count"),
+                "prompt_tps": usage.get("prompt_tps"),
+                "output_tps": usage.get("output_tps"),
+                "total_duration_ms": usage.get("total_duration_ms"),
+                "load_duration_ms": usage.get("load_duration_ms")
             }

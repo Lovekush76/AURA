@@ -521,18 +521,15 @@ def test_turn_persistence_deduplication_by_request_id():
 
 
 @pytest.mark.asyncio
-async def test_router_multi_turn_missing_strong_model_emits_fallback_reason():
+async def test_router_short_recall_uses_fast_model_without_escalation():
     """
-    Fix 2 Acceptance Test:
-    When a multi-turn conversation arrives and stronger models ('qwen3.5:4b', 'qwen2.5:1.5b')
-    are missing from Ollama /api/tags, the router selects 'qwen2.5:0.5b' but attaches
-    an explicit fallback_reason instead of silently treating it as equally capable.
+    P0 Test: Short, low-complexity recall and READY prompts use the fast qwen2.5:0.5b route
+    even with has_history=True, keeping TTFT sub-2s on local hardware.
     """
     from aura_assistant.core.llm.router import LLMRouter
 
     router = LLMRouter()
-    # Mock available models to only have qwen2.5:0.5b
-    router.get_available_models = AsyncMock(return_value=frozenset(["qwen2.5:0.5b"]))
+    router.get_available_models = AsyncMock(return_value=frozenset(["qwen2.5:0.5b", "qwen2.5:1.5b", "qwen3.5:4b"]))
 
     route = await router.resolve_route(
         prompt="What exact word did you reply with earlier?",
@@ -541,8 +538,52 @@ async def test_router_multi_turn_missing_strong_model_emits_fallback_reason():
     )
 
     assert route.model == "qwen2.5:0.5b"
+    assert route.num_predict == 128
+    assert route.num_thread == 4
+
+
+@pytest.mark.asyncio
+async def test_router_complex_analytical_prompt_escalates_to_moderate_or_strong():
+    """
+    P0 Test: Genuinely complex prompts escalate to moderate/stronger models when installed.
+    """
+    from aura_assistant.core.llm.router import LLMRouter
+
+    router = LLMRouter()
+    router.get_available_models = AsyncMock(return_value=frozenset(["qwen2.5:0.5b", "qwen2.5:1.5b"]))
+
+    complex_prompt = "Provide a comprehensive analysis and compare in detail the architectural tradeoffs between Paxos and Raft."
+    route = await router.resolve_route(
+        prompt=complex_prompt,
+        channel="text",
+        has_history=False
+    )
+
+    assert route.model == "qwen2.5:1.5b"
+    assert route.num_predict == 256
+
+
+@pytest.mark.asyncio
+async def test_router_multi_turn_missing_strong_model_emits_fallback_reason():
+    """
+    Fix 2 Acceptance Test:
+    When a complex task arrives and the preferred model is missing from Ollama /api/tags,
+    the router selects an installed fallback and reports the fallback_reason.
+    """
+    from aura_assistant.core.llm.router import LLMRouter
+
+    router = LLMRouter()
+    router.get_available_models = AsyncMock(return_value=frozenset(["qwen2.5:0.5b"]))
+
+    route = await router.resolve_route(
+        prompt="write a script to benchmark memory throughput",
+        channel="text",
+        has_history=True
+    )
+
+    assert route.model == "qwen2.5:0.5b"
     assert route.fallback_reason is not None
-    assert "strong_chat_model_unavailable" in route.fallback_reason
+    assert "requested_model_not_installed" in route.fallback_reason
 
 
 @pytest.mark.asyncio

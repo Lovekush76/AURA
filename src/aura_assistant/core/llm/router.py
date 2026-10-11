@@ -24,6 +24,9 @@ class RouteResult(BaseModel):
     keep_alive: Union[int, str] = "10m"
     reasoning_mode: bool = False
     fallback_reason: Optional[str] = None
+    num_predict: int = 128
+    num_thread: int = 4
+    num_batch: int = 512
 
 
 class LLMRouter:
@@ -48,12 +51,12 @@ class LLMRouter:
         self._swap_lock = asyncio.Lock()
 
         self.slots: Dict[str, Dict[str, Any]] = {
-            "voice": {"model": "qwen3.5:4b", "ctx": 1536, "temp": 0.4, "pinned": True, "keep_alive": -1},
-            "chat": {"model": "qwen2.5:0.5b", "ctx": 2048, "temp": 0.5, "pinned": True, "keep_alive": -1},
-            "chat_multi_turn": {"model": "qwen3.5:4b", "ctx": 4096, "temp": 0.3, "pinned": True, "keep_alive": -1},
-            "code": {"model": "qwen3-coder:30b", "ctx": 32768, "temp": 0.2, "pinned": False, "keep_alive": "10m"},
-            "reasoning": {"model": "deepseek-r1:14b", "ctx": 32768, "temp": 0.5, "pinned": False, "keep_alive": "10m"},
-            "ultra": {"model": "nvidia/nemotron-3-ultra", "ctx": 1000000, "temp": 0.3, "pinned": False, "keep_alive": "10m"}
+            "voice": {"model": "qwen3.5:4b", "ctx": 1536, "temp": 0.4, "pinned": True, "keep_alive": -1, "predict": 96, "threads": 4, "batch": 512},
+            "chat": {"model": "qwen2.5:0.5b", "ctx": 2048, "temp": 0.5, "pinned": True, "keep_alive": -1, "predict": 128, "threads": 4, "batch": 512},
+            "chat_moderate": {"model": "qwen2.5:1.5b", "ctx": 4096, "temp": 0.4, "pinned": True, "keep_alive": -1, "predict": 256, "threads": 4, "batch": 512},
+            "code": {"model": "qwen3-coder:30b", "ctx": 32768, "temp": 0.2, "pinned": False, "keep_alive": "10m", "predict": 1024, "threads": 6, "batch": 512},
+            "reasoning": {"model": "deepseek-r1:14b", "ctx": 32768, "temp": 0.5, "pinned": False, "keep_alive": "10m", "predict": 1024, "threads": 6, "batch": 512},
+            "ultra": {"model": "nvidia/nemotron-3-ultra", "ctx": 1000000, "temp": 0.3, "pinned": False, "keep_alive": "10m", "predict": 2048, "threads": 4, "batch": 512}
         }
 
         # Dynamically load overrides from models.yaml if available
@@ -76,7 +79,7 @@ class LLMRouter:
 
     def _load_config(self, config_path: Optional[str] = None) -> None:
         """Parses configs/models.yaml to populate slot models and residency attributes."""
-        path_to_try = Path(config_path) if config_path else Path(__file__).resolve().parents[3] / "configs" / "models.yaml"
+        path_to_try = Path(config_path) if config_path else Path(__file__).resolve().parents[4] / "configs" / "models.yaml"
         if not path_to_try.exists():
             return
         try:
@@ -171,7 +174,7 @@ class LLMRouter:
 
             client = self._get_client()
             try:
-                url = "/api/tags" if client.base_url else f"{self.ollama_host}/api/tags"
+                url = "/api/tags" if client.base_url.scheme else f"{self.ollama_host}/api/tags"
                 resp = await client.get(url, timeout=2.0)
                 if resp.status_code == 200:
                     data = resp.json() if callable(getattr(resp, "json", None)) else {}
@@ -199,7 +202,7 @@ class LLMRouter:
             return []
         client = self._get_client()
         try:
-            url = "/api/ps" if client.base_url else f"{self.ollama_host}/api/ps"
+            url = "/api/ps" if client.base_url.scheme else f"{self.ollama_host}/api/ps"
             resp = await client.get(url, timeout=2.0)
             if resp.status_code == 200:
                 data = resp.json() if callable(getattr(resp, "json", None)) else {}
@@ -214,38 +217,48 @@ class LLMRouter:
             logger.debug(f"Could not query /api/ps: {e}")
         return []
 
-    async def warm_pinned_models(self) -> bool:
-        """Pins the fast voice model into VRAM/RAM upon system startup."""
-        voice_cfg = self.slots["voice"]
-        logger.info(f"Locking primary voice model '{voice_cfg['model']}' into memory...")
+    async def warm_pinned_models(self, warm_chat: bool = False) -> bool:
+        """Pins the fast primary chat and voice models into host RAM/VRAM upon system startup."""
+        models_to_warm = [self.slots["voice"]["model"]]
+        if warm_chat and self.slots["chat"]["model"] not in models_to_warm:
+            models_to_warm.append(self.slots["chat"]["model"])
+
         client = self._get_client()
-        try:
-            url = "/api/generate" if client.base_url else f"{self.ollama_host}/api/generate"
-            resp = await client.post(
-                url,
-                json={"model": voice_cfg["model"], "keep_alive": -1},
-                timeout=10.0
-            )
-            if resp.status_code == 200:
-                logger.info("Voice model successfully locked into memory.")
-                return True
-        except Exception as e:
-            logger.info(f"Background pre-warm skipped (daemon offline or booting): {e}")
-            self._offline_backoff_until = time.time() + self.offline_backoff_seconds
-        return False
+        success = False
+        for m in models_to_warm:
+            logger.info(f"Locking primary low-latency model '{m}' into memory...")
+            try:
+                url = "/api/generate" if client.base_url.scheme else f"{self.ollama_host}/api/generate"
+                resp = await client.post(
+                    url,
+                    json={"model": m, "keep_alive": -1},
+                    timeout=10.0
+                )
+                if resp.status_code == 200:
+                    logger.info(f"Model '{m}' successfully locked into memory.")
+                    success = True
+            except Exception as e:
+                logger.info(f"Pre-warm skipped for '{m}' (daemon offline or booting): {e}")
+                self._offline_backoff_until = time.time() + self.offline_backoff_seconds
+        return success
 
     def _select_best_fallback(self, available: FrozenSet[str], channel: str) -> Dict[str, Any]:
         """Selects a supported pinned fallback model that is verified installed."""
-        voice_cfg = self.slots["voice"]
         chat_cfg = self.slots["chat"]
+        voice_cfg = self.slots["voice"]
         if channel == "voice":
             if not available or voice_cfg["model"] in available:
                 return voice_cfg
             if chat_cfg["model"] in available:
                 return chat_cfg
             return voice_cfg
+
+        # Text channel fallback when heavy model or requested model cannot be admitted:
+        # Fall back to voice/strong pinned model (qwen3.5:4b) if installed, else moderate, else chat_cfg
         if not available or voice_cfg["model"] in available:
-            return {"model": voice_cfg["model"], "ctx": 4096, "temp": 0.4, "pinned": True, "keep_alive": -1}
+            return {"model": voice_cfg["model"], "ctx": 4096, "temp": 0.4, "pinned": True, "keep_alive": -1, "predict": 256, "threads": 4, "batch": 512}
+        if "qwen2.5:1.5b" in available:
+            return {"model": "qwen2.5:1.5b", "ctx": 4096, "temp": 0.4, "pinned": True, "keep_alive": -1, "predict": 256, "threads": 4, "batch": 512}
         if chat_cfg["model"] in available:
             return chat_cfg
         return chat_cfg
@@ -259,7 +272,10 @@ class LLMRouter:
         keep_alive: Union[int, str],
         reasoning_mode: bool,
         available: FrozenSet[str],
-        channel: str
+        channel: str,
+        num_predict: int = 128,
+        num_thread: int = 4,
+        num_batch: int = 512
     ) -> RouteResult:
         """
         Unified admission & residency gate for all routes (automatic and override_model).
@@ -274,7 +290,10 @@ class LLMRouter:
                 temperature=ultra_cfg["temp"],
                 pinned=False,
                 keep_alive=ultra_cfg["keep_alive"],
-                reasoning_mode=True
+                reasoning_mode=True,
+                num_predict=num_predict,
+                num_thread=num_thread,
+                num_batch=num_batch
             )
 
         # 2. Verify model is installed in local Ollama (if inventory is known/non-empty)
@@ -289,7 +308,10 @@ class LLMRouter:
                 pinned=fb["pinned"],
                 keep_alive=fb["keep_alive"],
                 reasoning_mode=reasoning_mode,
-                fallback_reason=reason
+                fallback_reason=reason,
+                num_predict=num_predict,
+                num_thread=num_thread,
+                num_batch=num_batch
             )
 
         # 3. Pinned models are pre-admitted with keep_alive=-1
@@ -300,7 +322,10 @@ class LLMRouter:
                 temperature=temperature,
                 pinned=True,
                 keep_alive=-1,
-                reasoning_mode=reasoning_mode
+                reasoning_mode=reasoning_mode,
+                num_predict=num_predict,
+                num_thread=num_thread,
+                num_batch=num_batch
             )
 
         # 4. Heavy / non-pinned models must pass serialized residency admission
@@ -316,7 +341,10 @@ class LLMRouter:
                 pinned=fb["pinned"],
                 keep_alive=fb["keep_alive"],
                 reasoning_mode=reasoning_mode,
-                fallback_reason=reason
+                fallback_reason=reason,
+                num_predict=num_predict,
+                num_thread=num_thread,
+                num_batch=num_batch
             )
 
         return RouteResult(
@@ -325,7 +353,10 @@ class LLMRouter:
             temperature=temperature,
             pinned=False,
             keep_alive=keep_alive,
-            reasoning_mode=reasoning_mode
+            reasoning_mode=reasoning_mode,
+            num_predict=num_predict,
+            num_thread=num_thread,
+            num_batch=num_batch
         )
 
     async def resolve_route(
@@ -350,7 +381,10 @@ class LLMRouter:
                     keep_alive=ultra_cfg["keep_alive"],
                     reasoning_mode=True,
                     available=available,
-                    channel=channel
+                    channel=channel,
+                    num_predict=ultra_cfg.get("predict", 2048),
+                    num_thread=ultra_cfg.get("threads", 4),
+                    num_batch=ultra_cfg.get("batch", 512)
                 )
             else:
                 base_override = override_model[:-7] if override_model.endswith(":latest") else override_model
@@ -359,6 +393,8 @@ class LLMRouter:
                     {"ctx": 4096, "temp": 0.5, "pinned": False, "keep_alive": "10m", "reasoning": False}
                 )
                 effective_ctx = self.slots["voice"]["ctx"] if channel == "voice" and profile["pinned"] else profile["ctx"]
+                is_heavy = "30b" in base_override or "14b" in base_override
+                pred_tokens = 1024 if is_heavy else (128 if "0.5b" in base_override else 256)
                 res = await self._admit_and_resolve_route(
                     target_model=override_model,
                     num_ctx=effective_ctx,
@@ -367,7 +403,10 @@ class LLMRouter:
                     keep_alive=profile["keep_alive"],
                     reasoning_mode=profile["reasoning"],
                     available=available,
-                    channel=channel
+                    channel=channel,
+                    num_predict=pred_tokens,
+                    num_thread=4,
+                    num_batch=512
                 )
             logger.debug(f"route.resolved model={res.model} ctx={res.num_ctx} latency_ms={(time.perf_counter()-t0)*1000:.2f}")
             return res
@@ -383,13 +422,16 @@ class LLMRouter:
                 keep_alive=-1,
                 reasoning_mode=False,
                 available=available,
-                channel=channel
+                channel=channel,
+                num_predict=cfg.get("predict", 96),
+                num_thread=cfg.get("threads", 4),
+                num_batch=cfg.get("batch", 512)
             )
             return res
 
         # 3. Structural intent detection for coding
         code_markers = ["def ", "class ", "import ", "function(", "const ", "SELECT ", "curl ", "npm ", "```"]
-        if any(marker in prompt for marker in code_markers) or "write a script" in prompt.lower():
+        if any(marker in prompt for marker in code_markers) or "write a script" in prompt.lower() or "write code" in prompt.lower():
             cfg = self.slots["code"]
             return await self._admit_and_resolve_route(
                 target_model=cfg["model"],
@@ -399,11 +441,39 @@ class LLMRouter:
                 keep_alive=cfg["keep_alive"],
                 reasoning_mode=False,
                 available=available,
-                channel=channel
+                channel=channel,
+                num_predict=cfg.get("predict", 1024),
+                num_thread=cfg.get("threads", 6),
+                num_batch=cfg.get("batch", 512)
             )
 
-        # 4. Algorithmic reasoning and problem solving detection
+        # 4. Moderate conversational tasks (P0: ONLY when genuinely complex/analytical and long)
         lower_p = prompt.lower()
+        analytical_complex_markers = [
+            "compare in detail", "synthesize", "comprehensive analysis",
+            "technical breakdown", "in-depth explanation"
+        ]
+        is_genuinely_complex = (
+            len(prompt.strip()) > 300
+            or any(m in lower_p for m in analytical_complex_markers)
+        )
+        if is_genuinely_complex and "qwen2.5:1.5b" in available:
+            cfg = self.slots.get("chat_moderate", {"model": "qwen2.5:1.5b", "ctx": 4096, "temp": 0.4, "pinned": True, "keep_alive": -1})
+            return await self._admit_and_resolve_route(
+                target_model=cfg["model"],
+                num_ctx=cfg["ctx"],
+                temperature=cfg["temp"],
+                pinned=True,
+                keep_alive=-1,
+                reasoning_mode=False,
+                available=available,
+                channel=channel,
+                num_predict=cfg.get("predict", 256),
+                num_thread=cfg.get("threads", 4),
+                num_batch=cfg.get("batch", 512)
+            )
+
+        # 5. Algorithmic reasoning and problem solving detection
         reasoning_markers = [
             "prove", "analyze complexity", "architect", "deep analysis",
             "step by step", "algorithm", "derive", "calculate", "solve",
@@ -420,66 +490,15 @@ class LLMRouter:
                 keep_alive=cfg["keep_alive"],
                 reasoning_mode=True,
                 available=available,
-                channel=channel
+                channel=channel,
+                num_predict=cfg.get("predict", 1024),
+                num_thread=cfg.get("threads", 6),
+                num_batch=cfg.get("batch", 512)
             )
 
-        # 5. Multi-turn, analytical, or instruction-sensitive conversational routing (P2-8 & Fix 2)
-        instruction_sensitive_markers = [
-            "reply with", "exact", "previous", "earlier", "what did you",
-            "what did i", "explain", "compare", "summarize", "diagnos",
-            "telemetry", "cache", "history", "context", "table", "verify",
-            "audit", "recall", "remember"
-        ]
-        needs_strong_chat = (
-            has_history
-            or len(prompt.strip()) > 80
-            or any(m in lower_p for m in instruction_sensitive_markers)
-        )
-        if needs_strong_chat:
-            # Candidates in order of strength for multi-turn precision
-            candidates = [
-                self.slots.get("chat_multi_turn", {}).get("model", "qwen3.5:4b"),
-                "qwen2.5:1.5b"
-            ]
-            selected_strong: Optional[str] = None
-            for cand in candidates:
-                if not available or cand in available:
-                    if self.vram_arbiter is None or self.vram_arbiter.can_load_model(cand, num_ctx=4096):
-                        selected_strong = cand
-                        break
-
-            if selected_strong:
-                return await self._admit_and_resolve_route(
-                    target_model=selected_strong,
-                    num_ctx=4096,
-                    temperature=0.3,
-                    pinned=True,
-                    keep_alive=-1,
-                    reasoning_mode=False,
-                    available=available,
-                    channel=channel
-                )
-            else:
-                # Strong conversational models unavailable or rejected by VRAM arbiter
-                cfg = self.slots["chat"]
-                warning_reason = f"strong_chat_model_unavailable:fallback_to_{cfg['model']}"
-                logger.warning(
-                    f"Multi-turn context requires stronger chat model, but candidates {candidates} are unavailable; falling back to '{cfg['model']}' ({warning_reason})."
-                )
-                route_res = await self._admit_and_resolve_route(
-                    target_model=cfg["model"],
-                    num_ctx=cfg["ctx"],
-                    temperature=cfg["temp"],
-                    pinned=True,
-                    keep_alive=-1,
-                    reasoning_mode=False,
-                    available=available,
-                    channel=channel
-                )
-                route_res.fallback_reason = warning_reason
-                return route_res
-
-        # 6. Low-stakes, short single-turn conversation or constrained fallback
+        # 6. Default fast chat & recall route (qwen2.5:0.5b)
+        # Note: Short prompts, recall questions, and multi-turn exchanges stay here
+        # with full conversation history preserved in the context window.
         cfg = self.slots["chat"]
         return await self._admit_and_resolve_route(
             target_model=cfg["model"],
@@ -489,7 +508,10 @@ class LLMRouter:
             keep_alive=-1,
             reasoning_mode=False,
             available=available,
-            channel=channel
+            channel=channel,
+            num_predict=cfg.get("predict", 128),
+            num_thread=cfg.get("threads", 4),
+            num_batch=cfg.get("batch", 512)
         )
 
     async def _ensure_heavy_residency(
@@ -517,7 +539,7 @@ class LLMRouter:
 
             model_to_unload = evicted_by_arbiter or self.current_heavy_model
             client = self._get_client()
-            gen_url = "/api/generate" if client.base_url else f"{self.ollama_host}/api/generate"
+            gen_url = "/api/generate" if client.base_url.scheme else f"{self.ollama_host}/api/generate"
 
             try:
                 if model_to_unload and model_to_unload != target_model:

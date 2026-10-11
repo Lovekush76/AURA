@@ -25,7 +25,7 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Database initialization warning: {e}")
     container = get_container()
     try:
-        await container.llm_router.warm_pinned_models()
+        await container.llm_router.warm_pinned_models(warm_chat=True)
     except Exception as e:
         logger.warning(f"Model pre-warm warning (Ollama might be offline): {e}")
     logger.info("Aura Core is ready.")

@@ -175,11 +175,13 @@ class OllamaProvider:
         temperature: float = 0.7,
         num_ctx: int = 2048,
         keep_alive: Union[int, str] = "10m",
-        num_predict: Optional[int] = None
+        num_predict: Optional[int] = None,
+        num_thread: int = 4,
+        num_batch: int = 512
     ) -> AsyncGenerator[str, None]:
         """
         Streams tokens from NVIDIA NIM (if Nemotron Ultra selected) or local Ollama chat API.
-        Uses the authoritative num_ctx and keep_alive resolved by LLMRouter.
+        Uses authoritative num_ctx, keep_alive, num_predict, num_thread, and num_batch resolved by LLMRouter.
         """
         self.last_submitted_messages = list(messages)
 
@@ -201,7 +203,7 @@ class OllamaProvider:
             return
 
         self.last_response_source = "live_model"
-        effective_predict = num_predict or (1024 if num_ctx >= 16384 else 512)
+        effective_predict = num_predict or (1024 if num_ctx >= 16384 else (128 if "0.5b" in model else 256))
 
         payload = {
             "model": model,
@@ -212,8 +214,8 @@ class OllamaProvider:
             "options": {
                 "temperature": temperature,
                 "num_ctx": num_ctx,
-                "num_batch": 512,
-                "num_thread": 8,
+                "num_batch": num_batch,
+                "num_thread": num_thread,
                 "num_predict": effective_predict,
                 "use_mmap": True
             }
@@ -235,7 +237,16 @@ class OllamaProvider:
                         logger.warning(
                             f"Model '{model}' not found in Ollama. Invalidating cache and falling back to '{fallback_model}'."
                         )
-                        async for tok in self.stream_chat(fallback_model, messages, temperature, num_ctx=2048, keep_alive=-1):
+                        async for tok in self.stream_chat(
+                            fallback_model,
+                            messages,
+                            temperature,
+                            num_ctx=2048,
+                            keep_alive=-1,
+                            num_predict=128,
+                            num_thread=4,
+                            num_batch=512
+                        ):
                             yield tok
                         return
                     self.last_response_source = "offline_fallback"
@@ -261,15 +272,38 @@ class OllamaProvider:
                             first_token_ms = (time.perf_counter() - t_start) * 1000.0
                         yield content
                     if chunk.get("done"):
+                        prompt_eval_count = chunk.get("prompt_eval_count", 0)
+                        prompt_eval_duration_ns = chunk.get("prompt_eval_duration", 0)
+                        eval_count = chunk.get("eval_count", 0)
+                        eval_duration_ns = chunk.get("eval_duration", 0)
+                        load_duration_ns = chunk.get("load_duration", 0)
+                        total_duration_ns = chunk.get("total_duration", 0)
+
+                        prompt_eval_sec = prompt_eval_duration_ns / 1e9 if prompt_eval_duration_ns > 0 else 0.0
+                        eval_sec = eval_duration_ns / 1e9 if eval_duration_ns > 0 else 0.0
+
+                        prompt_tps = round(prompt_eval_count / prompt_eval_sec, 2) if prompt_eval_sec > 0 else 0.0
+                        # Only report output tps if at least 4 tokens were generated to avoid skewed rate on 2-token outputs
+                        gen_tps = round(eval_count / eval_sec, 2) if (eval_sec > 0 and eval_count >= 4) else (
+                            round(eval_count / eval_sec, 2) if eval_sec > 0 else 0.0
+                        )
+
                         self.last_usage_metrics = {
                             "model": model,
                             "num_ctx": num_ctx,
                             "keep_alive": keep_alive,
+                            "num_thread": num_thread,
+                            "num_batch": num_batch,
+                            "num_predict": effective_predict,
                             "ttft_ms": round(first_token_ms or 0.0, 2),
-                            "total_duration_ms": round(chunk.get("total_duration", 0) / 1e6, 2),
-                            "load_duration_ms": round(chunk.get("load_duration", 0) / 1e6, 2),
-                            "prompt_eval_count": chunk.get("prompt_eval_count", 0),
-                            "eval_count": chunk.get("eval_count", 0)
+                            "total_duration_ms": round(total_duration_ns / 1e6, 2),
+                            "load_duration_ms": round(load_duration_ns / 1e6, 2),
+                            "prompt_eval_duration_ms": round(prompt_eval_duration_ns / 1e6, 2),
+                            "eval_duration_ms": round(eval_duration_ns / 1e6, 2),
+                            "prompt_eval_count": prompt_eval_count,
+                            "eval_count": eval_count,
+                            "prompt_tps": prompt_tps,
+                            "output_tps": gen_tps
                         }
                         logger.info(f"llm.usage {json.dumps(self.last_usage_metrics)}")
                 except json.JSONDecodeError:
