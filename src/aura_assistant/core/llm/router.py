@@ -5,6 +5,7 @@ serialized heavy-model swapping via asyncio.Lock, and authoritative per-route nu
 """
 
 import asyncio
+import re
 import time
 import httpx
 import logging
@@ -53,6 +54,7 @@ class LLMRouter:
         self.slots: Dict[str, Dict[str, Any]] = {
             "voice": {"model": "qwen3.5:4b", "ctx": 1536, "temp": 0.4, "pinned": True, "keep_alive": -1, "predict": 96, "threads": 4, "batch": 512},
             "chat": {"model": "qwen2.5:0.5b", "ctx": 2048, "temp": 0.5, "pinned": True, "keep_alive": -1, "predict": 128, "threads": 4, "batch": 512},
+            "technical": {"model": "qwen2.5:1.5b", "ctx": 4096, "temp": 0.4, "pinned": True, "keep_alive": -1, "predict": 512, "threads": 4, "batch": 512},
             "chat_moderate": {"model": "qwen2.5:1.5b", "ctx": 4096, "temp": 0.4, "pinned": True, "keep_alive": -1, "predict": 256, "threads": 4, "batch": 512},
             "code": {"model": "qwen3-coder:30b", "ctx": 32768, "temp": 0.2, "pinned": False, "keep_alive": "10m", "predict": 1024, "threads": 6, "batch": 512},
             "reasoning": {"model": "deepseek-r1:14b", "ctx": 32768, "temp": 0.5, "pinned": False, "keep_alive": "10m", "predict": 1024, "threads": 6, "batch": 512},
@@ -359,12 +361,49 @@ class LLMRouter:
             num_batch=num_batch
         )
 
+    @staticmethod
+    def classify_technical_intent(prompt: str, active_topic: Optional[str] = None) -> bool:
+        """
+        Lightweight intent classifier for technical programming concepts, language specifications,
+        and follow-up questions referencing technical topics.
+        """
+        lower = prompt.lower().strip()
+        technical_terms = [
+            "inheritance", "polymorphism", "encapsulation", "abstraction",
+            "interface", "interfaces", "abstract class", "abstract classes",
+            "sql join", "inner join", "left join", "right join", "outer join", "foreign key",
+            "dependency injection", "inversion of control", "design pattern", "singleton",
+            "primitive type", "primitive types", "data type", "data types",
+            "what is java", "what is python", "what is c++", "what is rust", "what is go",
+            "binary tree", "hashmap", "linked list", "recursion",
+            "concurrency", "multithreading", "garbage collection"
+        ]
+        for term in technical_terms:
+            if re.search(rf"\b{re.escape(term)}\b", lower):
+                return True
+
+        if active_topic:
+            follow_up_patterns = [
+                r"\bits\s+(type|types|syntax|features|properties|use|purpose)\b",
+                r"\bhow\s+(does\s+it\s+work|to\s+use\s+it)\b",
+                r"\b(types?|syntax|examples?|difference|pros\s+and\s+cons)\b",
+                r"\bexplain\s+it\b",
+                r"\bwhat\s+about\s+it\b",
+                r"\bshow\s+an\s+example\b"
+            ]
+            for pat in follow_up_patterns:
+                if re.search(pat, lower):
+                    return True
+
+        return False
+
     async def resolve_route(
         self,
         prompt: str,
         channel: str = "text",
         override_model: Optional[str] = None,
-        has_history: bool = False
+        has_history: bool = False,
+        active_topic: Optional[str] = None
     ) -> RouteResult:
         t0 = time.perf_counter()
         available = await self.get_available_models()
@@ -394,7 +433,7 @@ class LLMRouter:
                 )
                 effective_ctx = self.slots["voice"]["ctx"] if channel == "voice" and profile["pinned"] else profile["ctx"]
                 is_heavy = "30b" in base_override or "14b" in base_override
-                pred_tokens = 1024 if is_heavy else (128 if "0.5b" in base_override else 256)
+                pred_tokens = 1024 if is_heavy else (512 if ("0.5b" in base_override or "1.5b" in base_override) else 512)
                 res = await self._admit_and_resolve_route(
                     target_model=override_model,
                     num_ctx=effective_ctx,
@@ -444,6 +483,25 @@ class LLMRouter:
                 channel=channel,
                 num_predict=cfg.get("predict", 1024),
                 num_thread=cfg.get("threads", 6),
+                num_batch=cfg.get("batch", 512)
+            )
+
+        # 4. Technical concept and programming specification routing (qwen2.5:1.5b)
+        if self.classify_technical_intent(prompt, active_topic=active_topic):
+            cfg = self.slots.get("technical", self.slots.get("chat_moderate", {
+                "model": "qwen2.5:1.5b", "ctx": 4096, "temp": 0.4, "pinned": True, "keep_alive": -1, "predict": 512
+            }))
+            return await self._admit_and_resolve_route(
+                target_model=cfg["model"],
+                num_ctx=cfg["ctx"],
+                temperature=cfg["temp"],
+                pinned=cfg.get("pinned", True),
+                keep_alive=cfg.get("keep_alive", -1),
+                reasoning_mode=False,
+                available=available,
+                channel=channel,
+                num_predict=cfg.get("predict", 512),
+                num_thread=cfg.get("threads", 4),
                 num_batch=cfg.get("batch", 512)
             )
 

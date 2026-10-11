@@ -507,13 +507,26 @@ class ChatService:
             )
             has_history = len(prior_turns) > 0
 
-            # 1. Multi-Model Intent & Residency Resolution (P2-8: passes has_history)
+            # Determine active topic from recent history for follow-up classification
+            active_topic = None
+            if prior_turns:
+                for turn in reversed(prior_turns[-4:]):
+                    c_low = turn.content.lower()
+                    for tech_kw in ["java", "python", "javascript", "typescript", "c++", "rust", "go", "sql", "oop", "database"]:
+                        if re.search(rf"\b{re.escape(tech_kw)}\b", c_low):
+                            active_topic = tech_kw
+                            break
+                    if active_topic:
+                        break
+
+            # 1. Multi-Model Intent & Residency Resolution (P2-8: passes has_history and active_topic)
             t0 = time.perf_counter()
             route: RouteResult = await self.router.resolve_route(
                 prompt=prompt,
                 channel=channel,
                 override_model=override_model,
-                has_history=has_history
+                has_history=has_history,
+                active_topic=active_topic
             )
             route_ms = (time.perf_counter() - t0) * 1000.0
 
@@ -607,7 +620,7 @@ class ChatService:
             t_ctx0 = time.perf_counter()
             profile_data = self.memory.get_profile()
             resolved_query = self.context_engine.resolve_coreferences(session_id, prompt)
-            relevant_facts = self.memory.retrieve_relevant_facts(resolved_query, limit=4)
+            relevant_facts = self.memory.retrieve_relevant_facts(resolved_query, session_id=session_id, limit=4)
 
             messages, context_telemetry = self.context_engine.build_engineered_context(
                 session_id=session_id,
@@ -691,7 +704,9 @@ class ChatService:
                 },
                 "cache_status": cache_event["status"],
                 "cache_reason": cache_event["reason"],
-                "response_source": response_source
+                "response_source": response_source,
+                "active_topic": active_topic,
+                "route_fallback_reason": route.fallback_reason
             }
             if os.environ.get("AURA_DEBUG_TRACE") == "1":
                 pre_inference_diagnostics["redacted_message_previews"] = [
@@ -803,5 +818,7 @@ class ChatService:
                 "prompt_tps": usage.get("prompt_tps"),
                 "output_tps": usage.get("output_tps"),
                 "total_duration_ms": usage.get("total_duration_ms"),
-                "load_duration_ms": usage.get("load_duration_ms")
+                "load_duration_ms": usage.get("load_duration_ms"),
+                "done_reason": usage.get("done_reason", "stop"),
+                "truncated": usage.get("truncated", False)
             }

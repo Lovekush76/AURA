@@ -31,6 +31,8 @@ export interface AuraSseDoneEvent {
   cache_reason?: string;
   previous_exchange_present?: boolean;
   pre_llm_overhead_ms?: number;
+  done_reason?: string;
+  truncated?: boolean;
 }
 
 export interface AuraSseCallbacks {

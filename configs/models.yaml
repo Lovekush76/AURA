@@ -9,6 +9,11 @@ routing:
     fallback: ["qwen2.5:1.5b", "qwen3.5:4b"]
     vram_budget_mb: 500
     residency: "pinned"
+  technical:
+    primary: "qwen2.5:1.5b"
+    fallback: ["qwen3.5:4b", "qwen2.5:0.5b"]
+    vram_budget_mb: 1200
+    residency: "pinned"
   code:
     primary: "qwen3-coder:30b"
     fallback: ["qwen2.5-coder:7b"]

@@ -34,9 +34,10 @@ interface MessageRowProps {
   isCopied: boolean;
   onCopy: (id: string, text: string) => void;
   onSpeak: (text: string) => void;
+  onContinue?: () => void;
 }
 
-const MessageRow = memo(({ message: m, isCopied, onCopy, onSpeak }: MessageRowProps) => {
+const MessageRow = memo(({ message: m, isCopied, onCopy, onSpeak, onContinue }: MessageRowProps) => {
   return (
     <div
       className={`flex flex-col ${
@@ -121,6 +122,19 @@ const MessageRow = memo(({ message: m, isCopied, onCopy, onSpeak }: MessageRowPr
         <div className="whitespace-pre-wrap font-sans text-sm sm:text-base leading-relaxed break-words">
           {m.text}
         </div>
+
+        {m.sender === 'aura' && m.truncated && (
+          <div className="mt-3 pt-2 border-t border-amber-500/20 flex items-center justify-between gap-3 text-xs text-amber-300 bg-amber-500/10 px-3 py-2 rounded-lg">
+            <span>Response reached token limit.</span>
+            <button
+              type="button"
+              onClick={onContinue}
+              className="px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-400/30 rounded font-medium transition-colors cursor-pointer"
+            >
+              Continue generating
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -286,7 +300,9 @@ export const Terminal = () => {
             finalizeLastMessageDiagnostics(
               routedModel,
               doneEvent?.response_source,
-              doneEvent?.cache_status
+              doneEvent?.cache_status,
+              doneEvent?.truncated,
+              doneEvent?.done_reason
             );
           },
           onError: (errMsg) => {
@@ -435,6 +451,7 @@ export const Terminal = () => {
               isCopied={copiedId === m.id}
               onCopy={handleCopy}
               onSpeak={handleSpeak}
+              onContinue={() => sendQuery('Continue generating from where you left off.')}
             />
           ))}
         </div>

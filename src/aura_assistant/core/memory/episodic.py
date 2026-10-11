@@ -66,8 +66,8 @@ def _is_valid_fact_candidate(text: str) -> bool:
 
 
 class EpisodicMemoryManager:
-    def __init__(self, storage_dir: Path = Path("data/memory")):
-        self.storage_dir = storage_dir
+    def __init__(self, storage_dir: Union[Path, str] = Path("data/memory")):
+        self.storage_dir = Path(storage_dir)
         self.storage_dir.mkdir(parents=True, exist_ok=True)
         self.facts_file = self.storage_dir / "facts.json"
         self.profile_file = self.storage_dir.parent / "profile" / "user_profile.json"
@@ -268,6 +268,7 @@ class EpisodicMemoryManager:
                 return None
             self._facts.append({
                 "category": "episodic_archive",
+                "session_id": session_id,
                 "key": f"archive_{session_id}_{len(self._facts)}",
                 "fact": fact_str,
                 "source": "compaction",
@@ -367,6 +368,7 @@ class EpisodicMemoryManager:
     def retrieve_relevant_facts(
         self,
         query: str,
+        session_id: Optional[str] = None,
         limit: int = 4,
         max_total_chars: int = 600
     ) -> List[str]:
@@ -374,9 +376,31 @@ class EpisodicMemoryManager:
         Hybrid Retrieval using Reciprocal Rank Fusion (RRF):
         Combines precomputed BM25-style Lexical Specificity Scoring + 64-dim N-Gram Hash Cosine
         Similarity + Profile Authority Boost, capped by both item count and total character/token budget.
+        Enforces strict session-isolation for episodic conversation archives while preserving global user profile facts.
         """
         with self._lock:
-            facts_snapshot = list(self._facts)
+            raw_facts = list(self._facts)
+
+        if not raw_facts:
+            return []
+
+        # Session-isolation filter: exclude past conversation archives from different sessions
+        facts_snapshot = []
+        for item in raw_facts:
+            if item.get("category") == "episodic_archive":
+                item_sid = item.get("session_id")
+                fact_val = item.get("fact", "")
+                key_val = item.get("key", "")
+                if session_id:
+                    # Match by explicit item session_id, or [Session <id> Archive] marker
+                    if item_sid and item_sid != session_id:
+                        continue
+                    if not item_sid and f"[Session {session_id} Archive]" not in fact_val and f"archive_{session_id}" not in key_val:
+                        continue
+                else:
+                    # When no session_id is passed, exclude all session conversation archives
+                    continue
+            facts_snapshot.append(item)
 
         if not facts_snapshot:
             return []

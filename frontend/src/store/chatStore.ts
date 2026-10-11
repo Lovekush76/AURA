@@ -6,6 +6,7 @@ export type AuraModelId =
   | 'auto'
   | 'nvidia/nemotron-3-ultra'
   | 'qwen2.5:0.5b'
+  | 'qwen2.5:1.5b'
   | 'qwen3.5:4b'
   | 'deepseek-r1:14b';
 
@@ -18,6 +19,8 @@ export interface ChatMessage {
   responseSource?: AuraResponseSource;
   cacheStatus?: string;
   tps?: number;
+  truncated?: boolean;
+  doneReason?: string;
 }
 
 interface ChatStore {
@@ -46,7 +49,9 @@ interface ChatStore {
   finalizeLastMessageDiagnostics: (
     routedModel?: string,
     responseSource?: AuraResponseSource,
-    cacheStatus?: string
+    cacheStatus?: string,
+    truncated?: boolean,
+    doneReason?: string
   ) => void;
   setActiveRoutedModel: (model: string | null) => void;
   setStreaming: (streaming: boolean) => void;
@@ -79,6 +84,13 @@ export const MODEL_CATALOG: Record<
     context: '2,048 Tokens',
     badgeColor: 'cyan',
     desc: 'Ultra-low latency local FlashAttention generation (150–385 TPS)'
+  },
+  'qwen2.5:1.5b': {
+    label: 'Qwen 2.5 Technical (1.5B Local)',
+    short: 'Qwen 2.5 1.5B',
+    context: '4,096 Tokens',
+    badgeColor: 'blue',
+    desc: 'High-accuracy technical, programming syntax & concept grounding'
   },
   'qwen3.5:4b': {
     label: 'Qwen 3.5 Voice Core (4B Local)',
@@ -210,7 +222,7 @@ export const useChatStore = create<ChatStore>((set) => ({
         messages: [...state.messages, newMessage]
       };
     }),
-  finalizeLastMessageDiagnostics: (routedModel, responseSource, cacheStatus) =>
+  finalizeLastMessageDiagnostics: (routedModel, responseSource, cacheStatus, truncated, doneReason) =>
     set((state) => {
       const lastIdx = state.messages.length - 1;
       const last = lastIdx >= 0 ? state.messages[lastIdx] : undefined;
@@ -227,7 +239,9 @@ export const useChatStore = create<ChatStore>((set) => ({
         ...last,
         modelUsed: resolvedModelLabel,
         responseSource: effectiveSource,
-        cacheStatus: effectiveCache
+        cacheStatus: effectiveCache,
+        truncated: truncated ?? last.truncated,
+        doneReason: doneReason ?? last.doneReason
       };
       const nextMessages = state.messages.slice(0, lastIdx);
       nextMessages.push(updatedMessage);

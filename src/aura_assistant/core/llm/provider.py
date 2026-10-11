@@ -203,7 +203,7 @@ class OllamaProvider:
             return
 
         self.last_response_source = "live_model"
-        effective_predict = num_predict or (1024 if num_ctx >= 16384 else (128 if "0.5b" in model else 256))
+        effective_predict = num_predict or (1024 if num_ctx >= 16384 else 512)
 
         payload = {
             "model": model,
@@ -288,6 +288,9 @@ class OllamaProvider:
                             round(eval_count / eval_sec, 2) if eval_sec > 0 else 0.0
                         )
 
+                        done_reason = chunk.get("done_reason") or ("length" if eval_count >= effective_predict else "stop")
+                        truncated = (done_reason == "length")
+
                         self.last_usage_metrics = {
                             "model": model,
                             "num_ctx": num_ctx,
@@ -297,13 +300,15 @@ class OllamaProvider:
                             "num_predict": effective_predict,
                             "ttft_ms": round(first_token_ms or 0.0, 2),
                             "total_duration_ms": round(total_duration_ns / 1e6, 2),
-                            "load_duration_ms": round(load_duration_ns / 1e6, 2),
+                            "load_duration_ns": round(load_duration_ns / 1e6, 2),
                             "prompt_eval_duration_ms": round(prompt_eval_duration_ns / 1e6, 2),
                             "eval_duration_ms": round(eval_duration_ns / 1e6, 2),
                             "prompt_eval_count": prompt_eval_count,
                             "eval_count": eval_count,
                             "prompt_tps": prompt_tps,
-                            "output_tps": gen_tps
+                            "output_tps": gen_tps,
+                            "done_reason": done_reason,
+                            "truncated": truncated
                         }
                         logger.info(f"llm.usage {json.dumps(self.last_usage_metrics)}")
                 except json.JSONDecodeError:
