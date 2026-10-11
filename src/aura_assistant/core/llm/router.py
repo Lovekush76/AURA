@@ -28,6 +28,7 @@ class RouteResult(BaseModel):
     num_predict: int = 128
     num_thread: int = 4
     num_batch: int = 512
+    query_scope: str = "standard"
 
 
 class LLMRouter:
@@ -50,6 +51,16 @@ class LLMRouter:
         self._owns_client: bool = http_client is None
         self._tags_lock = asyncio.Lock()
         self._swap_lock = asyncio.Lock()
+
+        self.output_budgets: Dict[str, int] = {
+            "simple_factual": 512,
+            "standard_technical": 768,
+            "broad_overview": 1536,
+            "long_form": 2048,
+            "code_generation": 1024,
+            "reasoning_deep": 1536,
+            "recall": 128
+        }
 
         self.slots: Dict[str, Dict[str, Any]] = {
             "voice": {"model": "qwen3.5:4b", "ctx": 1536, "temp": 0.4, "pinned": True, "keep_alive": -1, "predict": 96, "threads": 4, "batch": 512},
@@ -95,7 +106,14 @@ class LLMRouter:
                         self.slots[slot_key]["model"] = primary_model
                     elif slot_key == "chat":
                         self.slots["chat"]["model"] = primary_model
-            logger.debug(f"Loaded dynamic models config from {path_to_try}")
+
+            out_cfg = data.get("output_budget", {})
+            if isinstance(out_cfg, dict):
+                for k, v in out_cfg.items():
+                    if isinstance(v, (int, float)) or (isinstance(v, str) and v.isdigit()):
+                        self.output_budgets[k] = int(v)
+
+            logger.debug(f"Loaded dynamic models config and output budgets from {path_to_try}")
         except Exception as e:
             logger.warning(f"Could not load models config from {path_to_try}: {e}")
 
@@ -277,7 +295,8 @@ class LLMRouter:
         channel: str,
         num_predict: int = 128,
         num_thread: int = 4,
-        num_batch: int = 512
+        num_batch: int = 512,
+        query_scope: str = "standard"
     ) -> RouteResult:
         """
         Unified admission & residency gate for all routes (automatic and override_model).
@@ -295,7 +314,8 @@ class LLMRouter:
                 reasoning_mode=True,
                 num_predict=num_predict,
                 num_thread=num_thread,
-                num_batch=num_batch
+                num_batch=num_batch,
+                query_scope=query_scope
             )
 
         # 2. Verify model is installed in local Ollama (if inventory is known/non-empty)
@@ -313,7 +333,8 @@ class LLMRouter:
                 fallback_reason=reason,
                 num_predict=num_predict,
                 num_thread=num_thread,
-                num_batch=num_batch
+                num_batch=num_batch,
+                query_scope=query_scope
             )
 
         # 3. Pinned models are pre-admitted with keep_alive=-1
@@ -327,7 +348,8 @@ class LLMRouter:
                 reasoning_mode=reasoning_mode,
                 num_predict=num_predict,
                 num_thread=num_thread,
-                num_batch=num_batch
+                num_batch=num_batch,
+                query_scope=query_scope
             )
 
         # 4. Heavy / non-pinned models must pass serialized residency admission
@@ -346,7 +368,8 @@ class LLMRouter:
                 fallback_reason=reason,
                 num_predict=num_predict,
                 num_thread=num_thread,
-                num_batch=num_batch
+                num_batch=num_batch,
+                query_scope=query_scope
             )
 
         return RouteResult(
@@ -358,7 +381,8 @@ class LLMRouter:
             reasoning_mode=reasoning_mode,
             num_predict=num_predict,
             num_thread=num_thread,
-            num_batch=num_batch
+            num_batch=num_batch,
+            query_scope=query_scope
         )
 
     @staticmethod
@@ -376,7 +400,8 @@ class LLMRouter:
             "primitive type", "primitive types", "data type", "data types",
             "what is java", "what is python", "what is c++", "what is rust", "what is go",
             "binary tree", "hashmap", "linked list", "recursion",
-            "concurrency", "multithreading", "garbage collection"
+            "concurrency", "multithreading", "garbage collection",
+            "machine learning", "oop", "oop concepts"
         ]
         for term in technical_terms:
             if re.search(rf"\b{re.escape(term)}\b", lower):
@@ -397,6 +422,82 @@ class LLMRouter:
 
         return False
 
+    def classify_query_scope(self, prompt: str, active_topic: Optional[str] = None) -> str:
+        """
+        Classifies prompt into query scopes for dynamic output budgeting:
+        - 'broad_overview': Multi-section informational overviews, concept breakdowns, complete feature/type explanations.
+        - 'code': Code snippets, scripts, implementations.
+        - 'reasoning': Algorithmic analysis, formal proofs, step-by-step logic.
+        - 'recall': Exact previous turn recall or strict verbatim requests.
+        - 'standard_technical': Specific technical concept or syntax questions.
+        - 'simple_factual': Short queries, arithmetic, greetings.
+        """
+        lower = prompt.lower().strip()
+
+        # 1. Exact recall
+        recall_markers = [
+            "reply with only", "exact text", "exact word", "what exact", "recall previous",
+            "repeat exactly", "what was the exact", "what did you reply", "reply with",
+            "earlier", "previous message", "last message", "what did i say", "what did you say"
+        ]
+        if any(m in lower for m in recall_markers):
+            return "recall"
+
+        # 2. Code generation
+        code_markers = ["def ", "class ", "import ", "function(", "const ", "SELECT ", "curl ", "npm ", "```"]
+        if any(marker in prompt for marker in code_markers) or "write a script" in lower or "write code" in lower or "implement a function" in lower:
+            return "code"
+
+        # 3. Reasoning
+        reasoning_markers = [
+            "prove", "analyze complexity", "architect", "deep analysis",
+            "step by step", "algorithm", "derive", "calculate", "solve",
+            "why does", "explain why", "deduce", "logic", "troubleshoot",
+            "root cause", "system design"
+        ]
+        if any(w in lower for w in reasoning_markers):
+            return "reasoning"
+
+        # 4. Broad Overview
+        broad_overview_patterns = [
+            r"\bwhat\s+is\s+(python|java|c\+\+|rust|go|javascript|typescript|machine\s+learning|oop|sql)\b",
+            r"\bexplain\s+(python|java|c\+\+|rust|go|machine\s+learning|oop|sql\s+joins?)\b",
+            r"\bexplain\s+[\w\s]+\s+and\s+its\s+(features|types|concepts|architecture|pillars)\b",
+            r"\b(what\s+are\s+the\s+types\s+of|types\s+of)\s+inheritance\b",
+            r"\bexplain\s+(oop\s+concepts|sql\s+joins?|machine\s+learning)\b",
+            r"\b(overview\s+of|architecture\s+of|features\s+of)\s+\w+\b",
+            r"\b(in\s+detail|complete\s+overview|all\s+major\s+features|give\s+me\s+the\s+full\s+explanation|comprehensively|deep\s+dive)\b"
+        ]
+        for pat in broad_overview_patterns:
+            if re.search(pat, lower):
+                return "broad_overview"
+
+        # Follow-up questions about an active topic
+        if active_topic:
+            follow_up_broad = [
+                r"\b(what\s+are\s+its\s+types|its\s+types\s+and\s+features|all\s+its\s+types|types\s+of\s+it)\b",
+                r"\bexplain\s+its\s+(types|features|components)\b",
+                r"\bshow\s+all\s+(types|features|examples)\b"
+            ]
+            for pat in follow_up_broad:
+                if re.search(pat, lower):
+                    return "broad_overview"
+
+        # 5. Standard Technical
+        if self.classify_technical_intent(prompt, active_topic=active_topic):
+            return "standard_technical"
+
+        # 6. Simple factual / short chat
+        simple_math_or_greeting = [
+            r"^\d+\s*[\+\-\*\/]\s*\d+\s*\??$",
+            r"^what\s+is\s+\d+\s*[\+\-\*\/]\s*\d+\s*\??$",
+            r"^(hello|hi|hey|good\s+morning|good\s+evening|who\s+are\s+you|help)\b"
+        ]
+        if any(re.search(pat, lower) for pat in simple_math_or_greeting) or len(lower) < 25:
+            return "simple_factual"
+
+        return "standard_technical" if len(lower) > 200 else "simple_factual"
+
     async def resolve_route(
         self,
         prompt: str,
@@ -407,11 +508,17 @@ class LLMRouter:
     ) -> RouteResult:
         t0 = time.perf_counter()
         available = await self.get_available_models()
+        scope = self.classify_query_scope(prompt, active_topic=active_topic)
 
         # 1. Explicit UI or API override_model goes through the exact same residency & context gate
         if override_model and override_model != "auto":
             if "nemotron" in override_model.lower() or override_model.startswith("nvidia/"):
                 ultra_cfg = self.slots["ultra"]
+                pred = (
+                    self.output_budgets.get("broad_overview", 1536)
+                    if scope == "broad_overview"
+                    else ultra_cfg.get("predict", 2048)
+                )
                 res = await self._admit_and_resolve_route(
                     target_model=override_model,
                     num_ctx=ultra_cfg["ctx"],
@@ -421,9 +528,10 @@ class LLMRouter:
                     reasoning_mode=True,
                     available=available,
                     channel=channel,
-                    num_predict=ultra_cfg.get("predict", 2048),
+                    num_predict=pred,
                     num_thread=ultra_cfg.get("threads", 4),
-                    num_batch=ultra_cfg.get("batch", 512)
+                    num_batch=ultra_cfg.get("batch", 512),
+                    query_scope=scope
                 )
             else:
                 base_override = override_model[:-7] if override_model.endswith(":latest") else override_model
@@ -433,7 +541,14 @@ class LLMRouter:
                 )
                 effective_ctx = self.slots["voice"]["ctx"] if channel == "voice" and profile["pinned"] else profile["ctx"]
                 is_heavy = "30b" in base_override or "14b" in base_override
-                pred_tokens = 1024 if is_heavy else (512 if ("0.5b" in base_override or "1.5b" in base_override) else 512)
+                if scope == "broad_overview":
+                    pred_tokens = min(self.output_budgets.get("broad_overview", 1536), max(256, effective_ctx - 512))
+                elif is_heavy:
+                    pred_tokens = 1024
+                elif scope == "recall":
+                    pred_tokens = 128
+                else:
+                    pred_tokens = 512
                 res = await self._admit_and_resolve_route(
                     target_model=override_model,
                     num_ctx=effective_ctx,
@@ -445,9 +560,10 @@ class LLMRouter:
                     channel=channel,
                     num_predict=pred_tokens,
                     num_thread=4,
-                    num_batch=512
+                    num_batch=512,
+                    query_scope=scope
                 )
-            logger.debug(f"route.resolved model={res.model} ctx={res.num_ctx} latency_ms={(time.perf_counter()-t0)*1000:.2f}")
+            logger.debug(f"route.resolved model={res.model} ctx={res.num_ctx} scope={scope} latency_ms={(time.perf_counter()-t0)*1000:.2f}")
             return res
 
         # 2. Modality enforcement: Voice channel must never experience cold model swaps
@@ -464,14 +580,16 @@ class LLMRouter:
                 channel=channel,
                 num_predict=cfg.get("predict", 96),
                 num_thread=cfg.get("threads", 4),
-                num_batch=cfg.get("batch", 512)
+                num_batch=cfg.get("batch", 512),
+                query_scope="voice"
             )
             return res
 
         # 3. Structural intent detection for coding
         code_markers = ["def ", "class ", "import ", "function(", "const ", "SELECT ", "curl ", "npm ", "```"]
-        if any(marker in prompt for marker in code_markers) or "write a script" in prompt.lower() or "write code" in prompt.lower():
+        if scope == "code" or any(marker in prompt for marker in code_markers) or "write a script" in prompt.lower() or "write code" in prompt.lower():
             cfg = self.slots["code"]
+            pred = self.output_budgets.get("code_generation", 1024)
             return await self._admit_and_resolve_route(
                 target_model=cfg["model"],
                 num_ctx=cfg["ctx"],
@@ -481,16 +599,24 @@ class LLMRouter:
                 reasoning_mode=False,
                 available=available,
                 channel=channel,
-                num_predict=cfg.get("predict", 1024),
+                num_predict=pred,
                 num_thread=cfg.get("threads", 6),
-                num_batch=cfg.get("batch", 512)
+                num_batch=cfg.get("batch", 512),
+                query_scope="code"
             )
 
         # 4. Technical concept and programming specification routing (qwen2.5:1.5b)
-        if self.classify_technical_intent(prompt, active_topic=active_topic):
+        if scope in ("broad_overview", "standard_technical") or self.classify_technical_intent(prompt, active_topic=active_topic):
             cfg = self.slots.get("technical", self.slots.get("chat_moderate", {
                 "model": "qwen2.5:1.5b", "ctx": 4096, "temp": 0.4, "pinned": True, "keep_alive": -1, "predict": 512
             }))
+            if scope == "broad_overview":
+                pred = self.output_budgets.get("broad_overview", 1536)
+            else:
+                pred = self.output_budgets.get("standard_technical", 768)
+            # Bound prediction tokens by context headroom: leave at least 512 tokens for prompt & history
+            max_headroom = max(128, cfg["ctx"] - 512)
+            pred = min(pred, max_headroom)
             return await self._admit_and_resolve_route(
                 target_model=cfg["model"],
                 num_ctx=cfg["ctx"],
@@ -500,12 +626,13 @@ class LLMRouter:
                 reasoning_mode=False,
                 available=available,
                 channel=channel,
-                num_predict=cfg.get("predict", 512),
+                num_predict=pred,
                 num_thread=cfg.get("threads", 4),
-                num_batch=cfg.get("batch", 512)
+                num_batch=cfg.get("batch", 512),
+                query_scope=scope
             )
 
-        # 4. Moderate conversational tasks (P0: ONLY when genuinely complex/analytical and long)
+        # 5. Moderate conversational tasks (P0: ONLY when genuinely complex/analytical and long)
         lower_p = prompt.lower()
         analytical_complex_markers = [
             "compare in detail", "synthesize", "comprehensive analysis",
@@ -528,18 +655,20 @@ class LLMRouter:
                 channel=channel,
                 num_predict=cfg.get("predict", 256),
                 num_thread=cfg.get("threads", 4),
-                num_batch=cfg.get("batch", 512)
+                num_batch=cfg.get("batch", 512),
+                query_scope=scope
             )
 
-        # 5. Algorithmic reasoning and problem solving detection
+        # 6. Algorithmic reasoning and problem solving detection
         reasoning_markers = [
             "prove", "analyze complexity", "architect", "deep analysis",
             "step by step", "algorithm", "derive", "calculate", "solve",
             "why does", "explain why", "deduce", "logic", "troubleshoot",
             "root cause", "system design"
         ]
-        if any(w in lower_p for w in reasoning_markers):
+        if scope == "reasoning" or any(w in lower_p for w in reasoning_markers):
             cfg = self.slots["reasoning"]
+            pred = self.output_budgets.get("reasoning_deep", 1536)
             return await self._admit_and_resolve_route(
                 target_model=cfg["model"],
                 num_ctx=cfg["ctx"],
@@ -549,15 +678,20 @@ class LLMRouter:
                 reasoning_mode=True,
                 available=available,
                 channel=channel,
-                num_predict=cfg.get("predict", 1024),
+                num_predict=pred,
                 num_thread=cfg.get("threads", 6),
-                num_batch=cfg.get("batch", 512)
+                num_batch=cfg.get("batch", 512),
+                query_scope="reasoning"
             )
 
-        # 6. Default fast chat & recall route (qwen2.5:0.5b)
+        # 7. Default fast chat & recall route (qwen2.5:0.5b)
         # Note: Short prompts, recall questions, and multi-turn exchanges stay here
         # with full conversation history preserved in the context window.
         cfg = self.slots["chat"]
+        if scope == "recall" or len(prompt.strip()) < 30:
+            pred = 128
+        else:
+            pred = self.output_budgets.get("simple_factual", 512)
         return await self._admit_and_resolve_route(
             target_model=cfg["model"],
             num_ctx=cfg["ctx"],
@@ -567,9 +701,10 @@ class LLMRouter:
             reasoning_mode=False,
             available=available,
             channel=channel,
-            num_predict=cfg.get("predict", 128),
+            num_predict=pred,
             num_thread=cfg.get("threads", 4),
-            num_batch=cfg.get("batch", 512)
+            num_batch=cfg.get("batch", 512),
+            query_scope=scope
         )
 
     async def _ensure_heavy_residency(

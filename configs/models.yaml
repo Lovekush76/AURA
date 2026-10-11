@@ -41,3 +41,11 @@ arbitration:
   safety_headroom_mb: 1024
   max_loaded_heavy_models: 1
   idle_heavy_timeout_seconds: 600
+
+output_budget:
+  simple_factual: 512
+  standard_technical: 768
+  broad_overview: 1536
+  long_form: 2048
+  code_generation: 1024
+  reasoning_deep: 1536
